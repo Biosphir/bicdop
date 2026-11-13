@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biosphir-cli"
+version = "0.1.0"
+description = "BIOSPHIR internal developer toolkit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["typer>=0.16,<1", "rich>=13,<16"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+biosphir = "biosphir_cli.cli:app"
+
+[tool.setuptools.package-data]
+biosphir_cli = ["projects.json"]
