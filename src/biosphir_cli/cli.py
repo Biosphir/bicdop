@@ -781,8 +781,9 @@ def rename_project(
 @app.command("--delete", context_settings={"help_option_names": ["--help"]})
 def delete(
     targets: Annotated[
-        list[str], typer.Argument(help="Project IDs, or .biosphir followed by an optional folder path.")
-    ],
+        list[str] | None, typer.Argument(help="Project IDs, or .biosphir followed by an optional folder path.")
+    ] = None,
+    folder: Annotated[Path | None, typer.Option("--folder", help="Folder path to delete.")] = None,
     additional_targets: Annotated[
         list[str] | None, typer.Option("--and", help="Additional project ID or marker folder. Repeat as needed.")
     ] = None,
@@ -791,6 +792,28 @@ def delete(
     ] = False,
 ) -> None:
     """Delete project folders permanently or remove a .biosphir marker."""
+    if folder is not None:
+        if targets or additional_targets:
+            fail("Use --folder with a single folder path.")
+        path = Path(os.path.abspath(folder.expanduser()))
+        resolved = path.resolve()
+        protected = [Path.cwd().resolve(), Path.home().resolve(), workspace_path().resolve()]
+        if any(item.is_relative_to(resolved) for item in protected):
+            fail(f"Cannot delete a protected or enclosing folder: {path}")
+        if not path.is_dir() or path != resolved:
+            fail(f"Expected an existing folder without redirected path components: {path}")
+        typer.echo(str(path))
+        if not no_confirm and not typer.confirm("Permanently delete this folder and its contents?"):
+            typer.echo("Cancelled.")
+            return
+        try:
+            shutil.rmtree(path, onerror=retry_readonly_file_delete)
+        except OSError as exc:
+            fail(f"Could not delete {path}: {exc}")
+        typer.echo(f"Deleted {path}")
+        return
+    if not targets:
+        fail("Provide project IDs, .biosphir, or --folder PATH.")
     if targets[0] == ".biosphir":
         if len(targets) > 2:
             fail("Provide at most one folder path after .biosphir.")
