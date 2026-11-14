@@ -7,6 +7,7 @@ import re
 import shutil
 import shlex
 import subprocess
+import stat
 import sys
 from collections import Counter
 from enum import Enum
@@ -555,6 +556,21 @@ def delete(
     delete_projects(targets, no_confirm)
 
 
+def retry_readonly_file_delete(operation, filename, error_info) -> None:
+    error = error_info[1]
+    if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
+        raise error
+    attributes = os.lstat(filename).st_file_attributes
+    if not attributes & stat.FILE_ATTRIBUTE_READONLY or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise error
+    os.chmod(filename, stat.S_IWRITE)
+    try:
+        operation(filename)
+    except OSError:
+        os.chmod(filename, stat.S_IREAD)
+        raise
+
+
 def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
     matches: dict[str, list[Path]] = {
         key: [] for key in dict.fromkeys(value.strip().lower() for value in project_ids)
@@ -595,7 +611,7 @@ def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
                 read_marker(folder / ".biosphir"), "id"
             ).lower() != key:
                 fail(f"Project changed since discovery: {folder}")
-            shutil.rmtree(folder)
+            shutil.rmtree(folder, onerror=retry_readonly_file_delete)
         except (OSError, ValueError) as exc:
             fail(f"Could not delete {folder}: {exc}")
         typer.echo(f"Deleted {folder}")

@@ -373,3 +373,18 @@ def test_action_help():
     result = runner.invoke(cli.app, ["--clone", "--help"])
     assert result.exit_code == 0
     assert "BIOSPHIR_WORKSPACE" in result.output
+
+
+@pytest.mark.skipif(cli.os.name != "nt", reason="Windows read-only file attributes")
+def test_delete_project_with_readonly_git_object(workspace, monkeypatch):
+    folder = workspace / "clone"
+    objects = folder / ".git" / "objects"
+    objects.mkdir(parents=True)
+    (folder / ".biosphir").write_text('{"id":"clone"}')
+    git_object = objects / "object"
+    git_object.write_text("object")
+    git_object.chmod(cli.stat.S_IREAD)
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder])
+    result = runner.invoke(cli.app, ["--delete", "clone", "--no-confirm"])
+    assert result.exit_code == 0, result.output
+    assert not folder.exists()
