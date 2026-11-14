@@ -104,6 +104,18 @@ biosphir discover --root "D:\Projects" --root "$env:USERPROFILE\Downloads"
 The report flags duplicate IDs and markers that need review. Discovery leaves
 all folders in place.
 
+## Set your workspace
+
+Navigate to the folder you want as your workspace and run:
+
+```powershell
+biosphir --set BIOSPHIR_WORKSPACE
+biosphir info
+```
+
+The CLI saves the folder for future sessions. A `BIOSPHIR_WORKSPACE`
+environment variable takes precedence over the saved setting.
+
 ## Project registry
 
 The bundled registry includes Notcher, Macro Pad Z1, Gwen, and the BIOSPHIR Website. Relative project paths resolve under `~/Documents/GitHub` by default. Set `$env:BIOSPHIR_WORKSPACE = 'D:\Projects'` to use another workspace in the current shell.

@@ -289,3 +289,15 @@ def test_rename_project(workspace, monkeypatch):
     result = runner.invoke(cli.app, ["projects", "rename", "DEMO"], input="New name\n")
     assert result.exit_code == 0, result.output
     assert json.loads(marker.read_text()) == {"id": "demo", "name": "New name", "extra": True}
+
+
+def test_set_workspace(tmp_path, monkeypatch):
+    config = tmp_path / "config" / "workspace.json"
+    monkeypatch.setattr(cli, "workspace_config_path", lambda: config)
+    monkeypatch.delenv("BIOSPHIR_WORKSPACE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(cli.app, ["--set", "BIOSPHIR_WORKSPACE"])
+    assert result.exit_code == 0, result.output
+    assert cli.workspace_path() == tmp_path
+    monkeypatch.setenv("BIOSPHIR_WORKSPACE", str(tmp_path / "override"))
+    assert cli.workspace_path() == tmp_path / "override"

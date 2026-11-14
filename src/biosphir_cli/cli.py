@@ -30,9 +30,40 @@ def registry_path() -> Path:
     return Path(os.environ.get("BIOSPHIR_REGISTRY", str(default))).expanduser()
 
 
+def workspace_config_path() -> Path:
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CONFIG_HOME")
+    return Path(base or Path.home() / ".config") / "biosphir-cli" / "workspace.json"
+
+
 def workspace_path() -> Path:
-    default = Path.home() / "Documents" / "GitHub"
-    return Path(os.environ.get("BIOSPHIR_WORKSPACE", str(default))).expanduser()
+    override = os.environ.get("BIOSPHIR_WORKSPACE")
+    if override:
+        return Path(override).expanduser()
+    config = workspace_config_path()
+    try:
+        value = json.loads(config.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return Path.home() / "Documents" / "GitHub"
+    except (OSError, ValueError) as exc:
+        fail(f"Cannot read workspace setting {config}: {exc}")
+    if not isinstance(value, dict) or not marker_field(value, "path"):
+        fail(f"Invalid workspace setting: {config}")
+    return Path(value["path"])
+
+
+def set_workspace(setting: str) -> None:
+    if setting != "BIOSPHIR_WORKSPACE":
+        fail("Use --set BIOSPHIR_WORKSPACE to save the current folder.")
+    folder = Path.cwd()
+    config = workspace_config_path()
+    try:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        write_marker(config, {"path": str(folder)})
+    except OSError as exc:
+        fail(f"Cannot save workspace setting: {exc}")
+    typer.echo(f"Saved BIOSPHIR_WORKSPACE: {folder}")
+    if os.environ.get("BIOSPHIR_WORKSPACE"):
+        error_console.print("The BIOSPHIR_WORKSPACE environment variable overrides the saved setting.")
 
 
 def load_projects() -> dict[str, dict[str, str]]:
@@ -129,7 +160,11 @@ def main(
         bool, typer.Option("--version", help="Show the BIOSPHIR CLI version.")
     ] = False,
     update: Annotated[bool, typer.Option("--update", help="Install the latest stable GitHub release.")] = False,
+    setting: Annotated[str | None, typer.Option("--set", help="Save BIOSPHIR_WORKSPACE as the current folder.")] = None,
 ) -> None:
+    if setting is not None:
+        set_workspace(setting)
+        raise typer.Exit()
     if update:
         from .updater import update_cli
 
