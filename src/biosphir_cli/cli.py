@@ -93,10 +93,11 @@ def main(
 @app.command()
 def projects() -> None:
     """List registered projects and their local status."""
-    table = Table("Project ID", "Name", "Local status")
+    table = Table("Project ID", "Name", "Local repo", "Local status")
     for key, entry in load_projects().items():
-        status = "Available" if project_path(entry).is_dir() else "Missing"
-        table.add_row(Text(key), Text(entry["name"]), status)
+        folder = project_path(entry)
+        status = "Available" if folder.is_dir() else "Missing"
+        table.add_row(Text(key), Text(entry["name"]), Text(folder.name), status)
     console.print(table)
 
 

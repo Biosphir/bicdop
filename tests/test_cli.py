@@ -37,6 +37,8 @@ def test_projects(workspace):
     result = runner.invoke(cli.app, ["projects"])
     assert result.exit_code == 0
     assert "Notcher" in result.stdout
+    assert "Local repo" in result.stdout
+    assert "Notcher folder" in result.stdout
     assert "Missing" in result.stdout
 
 
