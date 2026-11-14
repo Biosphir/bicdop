@@ -2,6 +2,13 @@
 
 An internal developer toolkit for Windows, built with Python, Typer, and Rich.
 
+## Interactive mode
+
+Run `biosphir` in CMD or PowerShell to open the `biosphir>` prompt. Type commands
+such as `projects`, `help`, or `check .biosphir "D:\My Projects\Demo"`.
+Type `exit` or `quit` to return to your terminal. Commands such as
+`biosphir projects` also work directly from CMD or PowerShell.
+
 ## Install in PowerShell
 
 Install Python 3.10 or newer and Git. Install VS Code to use `open`.
@@ -18,7 +25,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 
 | Command | What it does |
 | --- | --- |
-| `biosphir` | Show the CLI dashboard |
+| `biosphir` | Start interactive mode in a terminal |
 | `biosphir projects` | List folders with a .biosphir marker |
 | `biosphir open notcher` | Open the Notcher folder in VS Code |
 | `biosphir doctor` | Check Python, Git, VS Code, workspace, and registry |

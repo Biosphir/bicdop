@@ -5,7 +5,9 @@ import os
 import platform
 import re
 import shutil
+import shlex
 import subprocess
+import sys
 from collections import Counter
 from importlib.metadata import version
 from pathlib import Path
@@ -133,7 +135,40 @@ def main(
     if ctx.invoked_subcommand is None:
         console.print(f"[bold blue]BIOSPHIR CLI v{version('biosphir-cli')}[/]")
         console.print("Internal Developer Toolkit")
-        console.print("Run biosphir help for all commands.")
+        if sys.stdin.isatty():
+            console.print("Type help for commands or exit to leave.")
+            interactive_shell()
+        else:
+            console.print("Run biosphir help for all commands.")
+
+
+def interactive_shell() -> None:
+    while True:
+        try:
+            line = input("biosphir> ").strip()
+        except EOFError:
+            typer.echo()
+            return
+        except KeyboardInterrupt:
+            typer.echo()
+            continue
+        if line.lower() in {"exit", "quit"}:
+            return
+        lexer = shlex.shlex(line, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        if os.name == "nt":
+            lexer.escape = ""
+        try:
+            args = list(lexer)
+        except ValueError as exc:
+            error_console.print(Text(f"Invalid command: {exc}", style="red"))
+            continue
+        if args:
+            try:
+                subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
+            except KeyboardInterrupt:
+                typer.echo()
 
 
 @app.command()
