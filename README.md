@@ -204,3 +204,9 @@ biosphir --plant .biosphir --to "D:\Projects\First" --and "D:\Projects\Second"
 
 Use `--to` once before the first path. For clone, `--to` sets the destination
 for the first project. Additional projects use their default destinations.
+
+## Set up a Python project
+
+Run `biosphir --setup project-id` to create or reuse the project's `.venv`
+and install dependencies from `requirements.txt`. Then use
+`biosphir --run project-id main.py`.

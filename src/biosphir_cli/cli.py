@@ -466,6 +466,30 @@ def select_project(
     fail("Start interactive mode with biosphir, then run --select PROJECT_ID.")
 
 
+@app.command("--setup", context_settings={"help_option_names": ["--help"]})
+def setup_project(project_id: str) -> None:
+    """Prepare a project's Python environment and install requirements."""
+    folder = find_project_marker(project_id).parent
+    requirements = folder / "requirements.txt"
+    if not requirements.is_file():
+        fail(f"Requirements file not found: {requirements}")
+
+    environment = folder / ".venv"
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    base_python = getattr(sys, "_base_executable", None) or sys.executable
+    try:
+        if not python.is_file():
+            subprocess.run([base_python, "-m", "venv", str(environment)], cwd=folder, check=True)
+        subprocess.run(
+            [str(python), "-m", "pip", "install", "-r", str(requirements)],
+            cwd=folder,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        fail(f"Could not set up {project_id}: {exc}")
+    typer.echo(f"Python environment ready: {environment}")
+
+
 @app.command("--run", context_settings={"help_option_names": ["--help"]})
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],
