@@ -170,6 +170,7 @@ def projects(
 
     table = Table("Project ID", "Name", "Local repo", "Local status")
     table.add_column("Path", overflow="fold")
+    workspace = workspace_path().resolve()
     for folder in folders:
         try:
             metadata = read_marker(folder / ".biosphir")
@@ -178,7 +179,11 @@ def projects(
         project_id = marker_field(metadata, "id")
         name = marker_field(metadata, "name") or folder.name
         status = "Available" if project_id else "Review"
-        table.add_row(Text(project_id.lower() or "-"), Text(name), Text(folder.name), status, Text(str(folder)))
+        path_style = "" if folder.is_relative_to(workspace) else "yellow"
+        table.add_row(
+            Text(project_id.lower() or "-"), Text(name), Text(folder.name),
+            status, Text(str(folder), style=path_style),
+        )
     console.print(table)
 
 
