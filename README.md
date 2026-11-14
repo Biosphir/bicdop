@@ -159,7 +159,8 @@ biosphir --rename "project-id" PROJECT_NAME "New Project Name"
 ```
 
 The selected field is saved in `.biosphir`. IDs are stored in lowercase and
-must be unique across discovered projects. The folder path stays the same.
+must be unique across discovered projects. Display names must also be unique
+when renaming, ignoring letter case. The folder path stays the same.
 After changing the ID of the selected project, select it again using the new ID.
 
 Run `biosphir --run project-id main.py` to execute a Python script from
@@ -187,6 +188,6 @@ biosphir --clone "project-id" "D:\Backups\Project Copy"
 With no destination, a workspace clone creates a folder ending in `-copy`
 in the current terminal directory. A single project is copied beside its source. A supplied
 path names the new folder and its parent must already exist. Cloning copies
-the original files, including `.biosphir` and Git metadata. If both copies are
-in search locations, they retain the same project IDs and discovery flags them
-as duplicates. Choose a destination outside the source folder.
+the original files and Git metadata. Each copied project marker gets an ID
+ending in `-clone`, or `-clone-2`, `-clone-3`, and so on when an ID is already
+in use. Choose a destination outside the source folder.

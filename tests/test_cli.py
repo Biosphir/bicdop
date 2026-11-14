@@ -284,6 +284,7 @@ def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
     ("PROJECT_ID", "New Project ID", "new project id", "Old name"),
     ("PROJECT_NAME", "New name", "demo", "New name"),
     ("PROJECT_ID", "TAKEN", None, None),
+    ("PROJECT_NAME", "Taken Name", None, None),
 ])
 def test_rename_project(workspace, monkeypatch, field, value, expected_id, expected_name):
     folder = workspace / "original"
@@ -293,7 +294,7 @@ def test_rename_project(workspace, monkeypatch, field, value, expected_id, expec
     marker.write_text(json.dumps(original))
     other = workspace / "other"
     other.mkdir()
-    (other / ".biosphir").write_text('{"id":"taken"}')
+    (other / ".biosphir").write_text('{"id":"taken","name":"taken name"}')
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder, other])
 
     result = runner.invoke(cli.app, ["--rename", "DEMO", field, value])
@@ -328,7 +329,16 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     (project / ".biosphir").write_text('{"id":"demo"}')
     (project / "main.py").write_text("print('hello')")
     monkeypatch.setenv("BIOSPHIR_WORKSPACE", str(workspace))
-    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [project])
+    existing = workspace / "existing"
+    existing.mkdir()
+    (existing / ".biosphir").write_text('{"id":"DEMO-CLONE"}')
+    nested = project / "nested"
+    nested.mkdir()
+    (nested / ".biosphir").write_text('{"id":"nested"}')
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [
+        folder for folder in (project, nested, existing)
+        if roots is None or folder.is_relative_to(roots[0])
+    ])
     source = workspace if whole_workspace else project
     current = tmp_path / "current"
     current.mkdir()
@@ -342,7 +352,9 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     assert result.exit_code == 0, result.output
     copied = target / "Demo" if whole_workspace else target
     assert (copied / "main.py").read_text() == (project / "main.py").read_text()
-    assert (copied / ".biosphir").read_text() == '{"id":"demo"}'
+    assert json.loads((copied / ".biosphir").read_text())["id"] == "demo-clone-2"
+    assert json.loads((copied / "nested" / ".biosphir").read_text())["id"] == "nested-clone"
+    assert json.loads((project / ".biosphir").read_text())["id"] == "demo"
     assert runner.invoke(cli.app, args).exit_code == 1
 
 

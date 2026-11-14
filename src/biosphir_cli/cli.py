@@ -12,7 +12,7 @@ from collections import Counter
 from enum import Enum
 from importlib.metadata import version
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Annotated
 from uuid import uuid4
 
@@ -515,6 +515,16 @@ def rename_project(
         metadata_key = "id"
     else:
         metadata_key = "name"
+        for folder in find_marked_folders(None):
+            other_marker = folder / ".biosphir"
+            if other_marker == marker:
+                continue
+            try:
+                other_name = marker_field(read_marker(other_marker), "name")
+            except (OSError, ValueError):
+                other_name = ""
+            if (other_name or folder.name).casefold() == value.casefold():
+                fail(f"Project name already in use: {value!r}")
 
     try:
         metadata = read_marker(marker)
@@ -591,6 +601,35 @@ def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
         typer.echo(f"Deleted {folder}")
 
 
+def clone_marker_updates(source: Path) -> dict[Path, dict]:
+    source_folders = find_marked_folders([source])
+    used_ids = set()
+    source_metadata = {}
+    for folder in sorted(set(find_marked_folders(None)) | set(source_folders)):
+        try:
+            metadata = read_marker(folder / ".biosphir")
+        except (OSError, ValueError):
+            continue
+        project_id = marker_field(metadata, "id").lower()
+        if project_id:
+            used_ids.add(project_id)
+        if folder in source_folders:
+            source_metadata[folder] = metadata
+
+    updates = {}
+    for folder, metadata in source_metadata.items():
+        original_id = marker_field(metadata, "id").lower() or marker_defaults(folder)["id"]
+        base_id = f"{original_id}-clone"
+        clone_id = base_id
+        number = 2
+        while clone_id in used_ids:
+            clone_id = f"{base_id}-{number}"
+            number += 1
+        used_ids.add(clone_id)
+        updates[folder.relative_to(source) / ".biosphir"] = {**metadata, "id": clone_id}
+    return updates
+
+
 @app.command("--clone", context_settings={"help_option_names": ["--help"]})
 def clone_project(
     project: Annotated[str, typer.Argument(help="Project ID or BIOSPHIR_WORKSPACE.")],
@@ -621,6 +660,7 @@ def clone_project(
         fail(f"Destination parent folder does not exist: {target.parent}")
 
     try:
+        updates = clone_marker_updates(source)
         with Progress(
             SpinnerColumn(),
             TextColumn("Cloning"),
@@ -641,7 +681,14 @@ def clone_project(
                 progress.advance(task)
                 return result
 
-            shutil.copytree(source, target, symlinks=True, copy_function=copy_file)
+            with TemporaryDirectory(prefix=".biosphir-clone-", dir=target.parent) as directory:
+                staged = Path(directory) / "copy"
+                shutil.copytree(source, staged, symlinks=True, copy_function=copy_file)
+                for marker, metadata in updates.items():
+                    write_marker(staged / marker, metadata)
+                if os.path.lexists(target):
+                    fail(f"Destination already exists: {target}")
+                staged.rename(target)
         typer.echo(f"Files copied: {copied}")
     except OSError as exc:
         fail(f"Could not clone {source} to {target}: {exc}")
