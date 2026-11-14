@@ -553,6 +553,40 @@ def delete_projects(
         typer.echo(f"Deleted {folder}")
 
 
+@projects_app.command("clone")
+def clone_project(
+    project: Annotated[str, typer.Argument(help="Project ID or BIOSPHIR_WORKSPACE.")],
+    destination: Annotated[
+        Path | None, typer.Argument(help="New folder path. Defaults to a sibling ending in -copy.")
+    ] = None,
+) -> None:
+    """Duplicate a project or the workspace, including its files."""
+    source = (
+        workspace_path().resolve()
+        if project == "BIOSPHIR_WORKSPACE"
+        else find_project_marker(project).parent
+    )
+    if not source.is_dir():
+        fail(f"Source folder does not exist: {source}")
+    target = (
+        destination.expanduser().absolute()
+        if destination is not None
+        else source.parent / f"{source.name}-copy"
+    )
+    if target.resolve().is_relative_to(source):
+        fail(f"Destination must be outside the source: {target}")
+    if os.path.lexists(target):
+        fail(f"Destination already exists: {target}")
+    if not target.parent.is_dir():
+        fail(f"Destination parent folder does not exist: {target.parent}")
+
+    try:
+        shutil.copytree(source, target, symlinks=True)
+    except OSError as exc:
+        fail(f"Could not clone {source} to {target}: {exc}")
+    typer.echo(f"Cloned {source} to {target}")
+
+
 @projects_app.command("collect")
 def collect_workspace(
     no_confirm: Annotated[

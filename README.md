@@ -161,3 +161,19 @@ checks the latest stable GitHub release and installs it only when it is newer.
 Published release tags must use a version such as `v0.2.0` and match the version
 in `pyproject.toml`. On Windows, wait for the installer output before reopening
 BIOSPHIR and checking `biosphir --version`.
+
+
+## Clone a project or workspace
+
+```powershell
+biosphir projects clone BIOSPHIR_WORKSPACE
+biosphir projects clone BIOSPHIR_WORKSPACE "D:\Backups\BIOSPHIR"
+biosphir projects clone "project-id"
+biosphir projects clone "project-id" "D:\Backups\Project Copy"
+```
+
+An omitted destination creates a sibling folder ending in `-copy`. A supplied
+path names the new folder and its parent must already exist. Cloning copies
+the original files, including `.biosphir` and Git metadata. If both copies are
+in search locations, they retain the same project IDs and discovery flags them
+as duplicates. Choose a destination outside the source folder.

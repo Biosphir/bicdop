@@ -301,3 +301,26 @@ def test_set_workspace(tmp_path, monkeypatch):
     assert cli.workspace_path() == tmp_path
     monkeypatch.setenv("BIOSPHIR_WORKSPACE", str(tmp_path / "override"))
     assert cli.workspace_path() == tmp_path / "override"
+
+
+@pytest.mark.parametrize("whole_workspace", [False, True])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
+    workspace = tmp_path / "workspace"
+    project = workspace / "Demo"
+    project.mkdir(parents=True)
+    (project / ".biosphir").write_text('{"id":"demo"}')
+    (project / "main.py").write_text("print('hello')")
+    monkeypatch.setenv("BIOSPHIR_WORKSPACE", str(workspace))
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [project])
+    source = workspace if whole_workspace else project
+    target = tmp_path / "Copy with spaces" if explicit else source.with_name(source.name + "-copy")
+    args = ["projects", "clone", "BIOSPHIR_WORKSPACE" if whole_workspace else "demo"]
+    if explicit:
+        args.append(str(target))
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    copied = target / "Demo" if whole_workspace else target
+    assert (copied / "main.py").read_text() == (project / "main.py").read_text()
+    assert (copied / ".biosphir").read_text() == '{"id":"demo"}'
+    assert runner.invoke(cli.app, args).exit_code == 1
