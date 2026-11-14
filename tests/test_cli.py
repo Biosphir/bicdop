@@ -124,7 +124,7 @@ def test_plant(tmp_path, monkeypatch, explicit_folder):
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
     marker = folder / ".biosphir"
-    assert json.loads(marker.read_text()) == {"id": "project-folder", "name": "Project folder"}
+    assert json.loads(marker.read_text()) == {"schema_version": 1, "id": "project-folder", "name": "Project folder", "entrypoint": None}
 
     marker.write_text('{"name": "My Project"}', encoding="utf-8")
     result = runner.invoke(cli.app, args)

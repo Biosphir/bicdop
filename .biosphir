@@ -1,1 +1,6 @@
-{"id": "biosphir-cli", "name": "BIOSPHIR CLI"}
+{
+  "id": "biosphir-cli",
+  "name": "BIOSPHIR CLI",
+  "schema_version": 1,
+  "entrypoint": null
+}

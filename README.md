@@ -217,3 +217,7 @@ common Python files, and local Git status.
 Use `biosphir --move project-id --to "D:\Projects"` to move the project into an
 existing parent folder on the same volume. The project keeps its folder name.
 Choose a location within the discovery roots to keep finding the project by ID.
+
+Project markers store `schema_version` and an optional project-relative
+Python `entrypoint`. Use `biosphir --run project-id` or `--run` after
+selecting a project in interactive mode. Use `--fix .biosphir` to fill missing fields.

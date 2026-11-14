@@ -238,10 +238,10 @@ def interactive_shell() -> None:
             continue
         if args and args[0] == "--run" and "--help" not in args[1:]:
             operands = [arg for arg in args[1:] if arg not in {"--background", "--wait"}]
-            if len(operands) == 1 and selected_project is None:
+            if not operands and selected_project is None:
                 error_console.print("Select a project first with --select PROJECT_ID.")
                 continue
-            if len(operands) == 1:
+            if len(operands) <= 1 and selected_project is not None:
                 args = ["--run", "--background", selected_project, *args[1:]]
         if args:
             try:
@@ -358,10 +358,15 @@ def marker_path(marker: str, folder: Path) -> Path:
     return folder / marker
 
 
-def marker_defaults(folder: Path) -> dict[str, str]:
+def marker_defaults(folder: Path) -> dict:
     name = folder.name or str(folder)
     project_id = re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip(".-_")
-    return {"id": project_id or f"project-{uuid4().hex}", "name": name}
+    return {
+        "schema_version": 1,
+        "id": project_id or f"project-{uuid4().hex}",
+        "name": name,
+        "entrypoint": "main.py" if (folder / "main.py").is_file() else None,
+    }
 
 
 @app.command("--plant", context_settings={"help_option_names": ["--help"]})
@@ -534,13 +539,22 @@ def move_project(
 @app.command("--run", context_settings={"help_option_names": ["--help"]})
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],
-    script: Annotated[Path, typer.Argument(help="Python script relative to the project folder.")],
+    script: Annotated[Path | None, typer.Argument(help="Python script relative to the project folder.")] = None,
     background: Annotated[
         bool, typer.Option("--background/--wait", help="Run separately or wait for the script to finish.")
     ] = False,
 ) -> None:
     """Run a Python script from a project folder."""
-    folder = find_project_marker(project_id).parent
+    marker = find_project_marker(project_id)
+    folder = marker.parent
+    if script is None:
+        try:
+            entrypoint = marker_field(read_marker(marker), "entrypoint")
+        except (OSError, ValueError) as exc:
+            fail(f"Could not read entrypoint: {exc}")
+        if not entrypoint:
+            fail("No Python entrypoint configured. Specify a .py file or set entrypoint in .biosphir.")
+        script = Path(entrypoint)
     target = (folder / script).resolve()
     if not target.is_relative_to(folder) or target.suffix.lower() != ".py" or not target.is_file():
         fail(f"Expected an existing .py file inside the project: {target}")
@@ -889,6 +903,10 @@ def fix(
             key for key in ("id", "name")
             if not isinstance(metadata.get(key), str) or not metadata[key].strip()
         ]
+        if "schema_version" not in metadata:
+            missing.append("schema_version")
+        if "entrypoint" not in metadata:
+            missing.append("entrypoint")
         if not missing:
             console.print(Text(f"Already valid: {target}"))
             return
