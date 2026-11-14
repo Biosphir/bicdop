@@ -143,9 +143,11 @@ def main(
 
 
 def interactive_shell() -> None:
+    selected_project = None
     while True:
         try:
-            line = input("biosphir> ").strip()
+            prompt = f"biosphir[{selected_project}]> " if selected_project else "biosphir> "
+            line = input(prompt).strip()
         except EOFError:
             typer.echo()
             return
@@ -164,6 +166,19 @@ def interactive_shell() -> None:
         except ValueError as exc:
             error_console.print(Text(f"Invalid command: {exc}", style="red"))
             continue
+        if args[:2] == ["projects", "select"] and len(args) == 3 and args[2] != "--help":
+            try:
+                marker = find_project_marker(args[2])
+            except typer.Exit:
+                continue
+            selected_project = args[2].strip().lower()
+            typer.echo(f"Selected {selected_project}: {marker.parent}")
+            continue
+        if args and args[0] == "run":
+            if selected_project is None:
+                error_console.print("Select a project first with projects select PROJECT_ID.")
+                continue
+            args = ["projects", "run", selected_project, *args[1:]]
         if args:
             try:
                 subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
@@ -366,6 +381,14 @@ def find_project_marker(project_id: str) -> Path:
         fail(f"Ambiguous project ID {project_id!r}: " + ", ".join(map(str, matches)))
 
     return matches[0]
+
+
+@projects_app.command("select")
+def select_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID to select in interactive mode.")],
+) -> None:
+    """Select a project at the biosphir prompt."""
+    fail("Start interactive mode with biosphir, then run projects select PROJECT_ID.")
 
 
 @projects_app.command("run")

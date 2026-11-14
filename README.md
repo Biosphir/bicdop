@@ -9,6 +9,13 @@ such as `projects`, `help`, or `check .biosphir "D:\My Projects\Demo"`.
 Type `exit` or `quit` to return to your terminal. Commands such as
 `biosphir projects` also work directly from CMD or PowerShell.
 
+Select a project once per interactive session to run its scripts:
+
+```text
+biosphir> projects select my-project
+biosphir[my-project]> run main.py
+```
+
 ## Install in PowerShell
 
 Install Python 3.10 or newer and Git. Install VS Code to use `open`.
