@@ -172,7 +172,8 @@ biosphir projects clone "project-id"
 biosphir projects clone "project-id" "D:\Backups\Project Copy"
 ```
 
-An omitted destination creates a sibling folder ending in `-copy`. A supplied
+With no destination, a workspace clone creates a folder ending in `-copy`
+in the current terminal directory. A single project is copied beside its source. A supplied
 path names the new folder and its parent must already exist. Cloning copies
 the original files, including `.biosphir` and Git metadata. If both copies are
 in search locations, they retain the same project IDs and discovery flags them

@@ -558,21 +558,23 @@ def delete_projects(
 def clone_project(
     project: Annotated[str, typer.Argument(help="Project ID or BIOSPHIR_WORKSPACE.")],
     destination: Annotated[
-        Path | None, typer.Argument(help="New folder path. Defaults to a sibling ending in -copy.")
+        Path | None, typer.Argument(help="New folder path. Workspace copies default to the current directory.")
     ] = None,
 ) -> None:
     """Duplicate a project or the workspace, including its files."""
+    whole_workspace = project == "BIOSPHIR_WORKSPACE"
     source = (
         workspace_path().resolve()
-        if project == "BIOSPHIR_WORKSPACE"
+        if whole_workspace
         else find_project_marker(project).parent
     )
     if not source.is_dir():
         fail(f"Source folder does not exist: {source}")
+    default_parent = Path.cwd() if whole_workspace else source.parent
     target = (
         destination.expanduser().absolute()
         if destination is not None
-        else source.parent / f"{source.name}-copy"
+        else default_parent / f"{source.name}-copy"
     )
     if target.resolve().is_relative_to(source):
         fail(f"Destination must be outside the source: {target}")

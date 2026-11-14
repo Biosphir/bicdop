@@ -314,7 +314,11 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     monkeypatch.setenv("BIOSPHIR_WORKSPACE", str(workspace))
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [project])
     source = workspace if whole_workspace else project
-    target = tmp_path / "Copy with spaces" if explicit else source.with_name(source.name + "-copy")
+    current = tmp_path / "current"
+    current.mkdir()
+    monkeypatch.chdir(current)
+    default_parent = current if whole_workspace else source.parent
+    target = tmp_path / "Copy with spaces" if explicit else default_parent / (source.name + "-copy")
     args = ["projects", "clone", "BIOSPHIR_WORKSPACE" if whole_workspace else "demo"]
     if explicit:
         args.append(str(target))
