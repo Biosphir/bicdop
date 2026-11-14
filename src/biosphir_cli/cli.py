@@ -370,15 +370,22 @@ def plant(
     folder: Annotated[
         str, typer.Argument(help="Folder path or BIOSPHIR_WORKSPACE for bulk planting.")
     ] = ".",
+    additional_folders: Annotated[
+        list[str] | None, typer.Option("--and", help="Additional folder path. Repeat as needed.")
+    ] = None,
     no_confirm: Annotated[
         bool, typer.Option("--no-confirm", help="Skip confirmation when planting across the workspace.")
     ] = False,
 ) -> None:
     """Create a .biosphir marker in a folder or across the workspace."""
-    if folder == "BIOSPHIR_WORKSPACE":
-        plant_workspace(marker, no_confirm)
-        return
-    plant_marker(marker, Path(folder))
+    folders = [folder, *(additional_folders or [])]
+    for item in folders:
+        marker_path(marker, workspace_path() if item == "BIOSPHIR_WORKSPACE" else Path(item))
+    for item in folders:
+        if item == "BIOSPHIR_WORKSPACE":
+            plant_workspace(marker, no_confirm)
+        else:
+            plant_marker(marker, Path(item))
 
 
 def plant_marker(marker: str, folder: Path) -> None:
@@ -543,6 +550,9 @@ def delete(
     targets: Annotated[
         list[str], typer.Argument(help="Project IDs, or .biosphir followed by an optional folder path.")
     ],
+    additional_targets: Annotated[
+        list[str] | None, typer.Option("--and", help="Additional project ID or marker folder. Repeat as needed.")
+    ] = None,
     no_confirm: Annotated[
         bool, typer.Option("--no-confirm", help="Delete project folders without prompting.")
     ] = False,
@@ -551,9 +561,16 @@ def delete(
     if targets[0] == ".biosphir":
         if len(targets) > 2:
             fail("Provide at most one folder path after .biosphir.")
-        delete_marker(Path(targets[1]) if len(targets) == 2 else Path("."))
+        folders = [Path(item) for item in [*targets[1:], *(additional_targets or [])]]
+        folders = list(dict.fromkeys(folder.expanduser().resolve() for folder in folders or [Path(".")]))
+        for folder in folders:
+            target = marker_path(".biosphir", folder)
+            if not target.is_file():
+                fail(f"Marker file not found: {target}")
+        for folder in folders:
+            delete_marker(folder)
         return
-    delete_projects(targets, no_confirm)
+    delete_projects([*targets, *(additional_targets or [])], no_confirm)
 
 
 def retry_readonly_file_delete(operation, filename, error_info) -> None:
@@ -652,8 +669,21 @@ def clone_project(
     destination: Annotated[
         Path | None, typer.Argument(help="New folder path. Workspace copies default to the current directory.")
     ] = None,
+    additional_projects: Annotated[
+        list[str] | None, typer.Option("--and", help="Additional project ID or BIOSPHIR_WORKSPACE. Repeat as needed.")
+    ] = None,
 ) -> None:
-    """Duplicate a project or the workspace, including its files."""
+    """Duplicate projects or the workspace, including their files."""
+    plan = [clone_paths(project, destination)]
+    plan.extend(clone_paths(item, None) for item in additional_projects or [])
+    targets = [target.resolve() for _, target in plan]
+    if len(set(targets)) != len(targets):
+        fail("Multiple clones would use the same destination.")
+    for source, target in plan:
+        copy_project(source, target)
+
+
+def clone_paths(project: str, destination: Path | None) -> tuple[Path, Path]:
     whole_workspace = project == "BIOSPHIR_WORKSPACE"
     source = (
         workspace_path().resolve()
@@ -675,6 +705,10 @@ def clone_project(
     if not target.parent.is_dir():
         fail(f"Destination parent folder does not exist: {target.parent}")
 
+    return source, target
+
+
+def copy_project(source: Path, target: Path) -> None:
     try:
         updates = clone_marker_updates(source)
         with Progress(

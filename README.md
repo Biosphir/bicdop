@@ -191,3 +191,16 @@ path names the new folder and its parent must already exist. Cloning copies
 the original files and Git metadata. Each copied project marker gets an ID
 ending in `-clone`, or `-clone-2`, `-clone-3`, and so on when an ID is already
 in use. Choose a destination outside the source folder.
+
+### Multiple targets
+
+Repeat `--and` to add targets:
+
+```powershell
+biosphir --clone "project-a" --and "project-b" --and "project-c"
+biosphir --delete "project-a" --and "project-b"
+biosphir --plant .biosphir "D:\Projects\First" --and "D:\Projects\Second"
+```
+
+For clone, an explicit destination applies to the first project. Additional
+projects use their default destinations.
