@@ -27,7 +27,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 
 ## Automatic project discovery
 
-Use `plant` to create an empty marker in the current folder or in an existing
+Use `plant` to create a marker with a project ID and display name in the current folder or in an existing
 folder specified by path. An existing marker keeps its contents.
 
 ```powershell
@@ -51,6 +51,12 @@ biosphir delete .biosphir "D:\Projects\My Project"
 
 Run `biosphir show .biosphir` to print the paths of marked projects directly
 under the configured workspace.
+
+Use `biosphir fix .biosphir` to repair the current folder's marker, or pass a
+folder path as the final argument. Repair fills missing fields and rebuilds
+unreadable JSON. Valid fields in a JSON object are preserved. Generated IDs
+use the lowercase folder name with spaces replaced by hyphens. Review duplicate
+IDs with `biosphir discover`.
 
 Discovery scans project folders directly under the workspace.
 An empty file uses the folder name as its display name and the lowercase folder

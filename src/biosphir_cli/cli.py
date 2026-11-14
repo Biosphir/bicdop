@@ -3,12 +3,15 @@
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 from collections import Counter
 from importlib.metadata import version
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Annotated
+from uuid import uuid4
 
 import typer
 from rich.console import Console
@@ -173,6 +176,12 @@ def marker_path(marker: str, folder: Path) -> Path:
     return folder / marker
 
 
+def marker_defaults(folder: Path) -> dict[str, str]:
+    name = folder.name or str(folder)
+    project_id = re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip(".-_")
+    return {"id": project_id or f"project-{uuid4().hex}", "name": name}
+
+
 @app.command()
 def plant(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
@@ -181,8 +190,9 @@ def plant(
     """Create a .biosphir marker in an existing folder."""
     target = marker_path(marker, folder)
     try:
-        with target.open("x", encoding="utf-8"):
-            pass
+        with target.open("x", encoding="utf-8") as file:
+            json.dump(marker_defaults(target.parent), file, ensure_ascii=False, indent=2)
+            file.write("\n")
     except FileExistsError:
         if not target.is_file():
             fail(f"Marker path is not a file: {target}")
@@ -191,6 +201,51 @@ def plant(
         fail(f"Could not create marker {target}: {exc}")
     else:
         console.print(Text(f"Created {target}"))
+
+
+@app.command()
+def fix(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
+) -> None:
+    """Repair an existing .biosphir marker."""
+    target = marker_path(marker, folder)
+    if not target.is_file():
+        fail(f"Marker file not found: {target}. Use biosphir plant .biosphir to create it.")
+    if target.is_symlink():
+        fail(f"Cannot repair a symbolic link: {target}")
+
+    temp_path = None
+    try:
+        try:
+            metadata = json.loads(target.read_text(encoding="utf-8-sig"))
+        except ValueError:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        missing = [
+            key for key in ("id", "name")
+            if not isinstance(metadata.get(key), str) or not metadata[key].strip()
+        ]
+        if not missing:
+            console.print(Text(f"Already valid: {target}"))
+            return
+        defaults = marker_defaults(target.parent)
+        for key in missing:
+            metadata[key] = defaults[key]
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=target.parent, delete=False
+        ) as file:
+            temp_path = Path(file.name)
+            json.dump(metadata, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        temp_path.replace(target)
+    except OSError as exc:
+        fail(f"Could not repair marker {target}: {exc}")
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+    console.print(Text(f"Repaired {target}"))
 
 
 @app.command()

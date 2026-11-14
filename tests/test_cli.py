@@ -119,7 +119,7 @@ def test_plant(tmp_path, monkeypatch, explicit_folder):
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
     marker = folder / ".biosphir"
-    assert marker.read_text() == ""
+    assert json.loads(marker.read_text()) == {"id": "project-folder", "name": "Project folder"}
 
     marker.write_text('{"name": "My Project"}', encoding="utf-8")
     result = runner.invoke(cli.app, args)
@@ -192,3 +192,20 @@ def test_discover_reports_duplicates_and_review(tmp_path):
     assert result.exit_code == 0
     assert result.stdout.count("Duplicate ID") == 2
     assert "Review: missing ID" in result.stdout
+
+
+@pytest.mark.parametrize("content", ["", "{broken", '{"id": "stable", "extra": true}'])
+def test_fix(tmp_path, content):
+    folder = tmp_path / "Project Folder"
+    folder.mkdir()
+    marker = folder / ".biosphir"
+    marker.write_text(content, encoding="utf-8")
+    result = runner.invoke(cli.app, ["fix", ".biosphir", str(folder)])
+    assert result.exit_code == 0
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["name"] == "Project Folder"
+    if "stable" in content:
+        assert data["id"] == "stable"
+        assert data["extra"] is True
+    else:
+        assert data["id"] == "project-folder"
