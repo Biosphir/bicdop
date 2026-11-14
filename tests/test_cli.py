@@ -33,7 +33,8 @@ def test_version_option():
     assert result.stdout.strip() == "BIOSPHIR CLI v0.1.0"
 
 
-def test_projects(workspace):
+def test_projects(workspace, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "200")
     folder = workspace / "group" / "marked"
     folder.mkdir(parents=True)
     (folder / ".biosphir").write_text('{"id":"demo","name":"Demo project"}')
@@ -41,6 +42,8 @@ def test_projects(workspace):
     assert result.exit_code == 0
     assert "Notcher" not in result.stdout
     assert "Local repo" in result.stdout
+    assert "Workspace folder has no .biosphir file" in result.stderr
+    assert str(folder.parent) in result.stderr
     assert "Demo project" in result.stdout
     assert "Available" in result.stdout
 

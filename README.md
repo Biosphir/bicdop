@@ -69,7 +69,8 @@ name as its ID. For a stable ID and custom display name, use JSON:
 
 The `projects` command lists only folders with a `.biosphir` marker. It uses
 the same recursive search and repeatable `--root` option as `discover` and
-marks entries without a readable ID as `Review`. Commit the marker to share
+marks entries without a readable ID as `Review`. It warns about immediate
+workspace subfolders that lack a marker. Commit the marker to share
 it with everyone who clones the project.
 
 ## Discover projects across folders

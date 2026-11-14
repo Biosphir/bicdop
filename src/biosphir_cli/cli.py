@@ -143,6 +143,13 @@ def projects(
     ] = None,
 ) -> None:
     """List folders containing a .biosphir marker."""
+    workspace = workspace_path()
+    if workspace.is_dir():
+        for folder in sorted(workspace.iterdir()):
+            if folder.is_dir() and not (folder / ".biosphir").is_file():
+                error_console.print(
+                    Text(f"Warning: Workspace folder has no .biosphir file: {folder}", style="yellow")
+                )
     folders = find_marked_folders(roots)
     if not folders:
         typer.echo("No .biosphir projects found.")
