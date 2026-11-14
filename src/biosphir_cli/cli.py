@@ -224,22 +224,24 @@ def interactive_shell() -> None:
         except ValueError as exc:
             error_console.print(Text(f"Invalid command: {exc}", style="red"))
             continue
-        if args[:2] == ["projects", "--select"] and len(args) == 3 and args[2] != "--help":
+        if len(args) == 2 and args[0] == "--select" and args[1] != "--help":
             try:
-                marker = find_project_marker(args[2])
+                marker = find_project_marker(args[1])
             except typer.Exit:
                 continue
-            selected_project = args[2].strip().lower()
+            selected_project = args[1].strip().lower()
             typer.echo(f"Selected {selected_project}: {marker.parent}")
             continue
         if args == ["--update"]:
             typer.echo("Type --exit, then run biosphir --update from your terminal.")
             continue
-        if args and args[0] == "--run":
-            if selected_project is None:
-                error_console.print("Select a project first with projects --select PROJECT_ID.")
+        if args and args[0] == "--run" and "--help" not in args[1:]:
+            operands = [arg for arg in args[1:] if arg not in {"--background", "--wait"}]
+            if len(operands) == 1 and selected_project is None:
+                error_console.print("Select a project first with --select PROJECT_ID.")
                 continue
-            args = ["projects", "--run", "--background", selected_project, *args[1:]]
+            if len(operands) == 1:
+                args = ["--run", "--background", selected_project, *args[1:]]
         if args:
             try:
                 subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
@@ -249,17 +251,8 @@ def interactive_shell() -> None:
 
 @app.command("--help", context_settings={"help_option_names": ["--help"]})
 def help(ctx: typer.Context) -> None:
-    """Show all commands, including project subcommands."""
-    root = ctx.find_root()
-    typer.echo(root.get_help())
-    typer.echo()
-    projects_command = root.command.get_command(root, "projects")
-    with projects_command.make_context("projects", [], parent=root) as projects_context:
-        typer.echo(projects_context.get_help())
-
-
-projects_app = typer.Typer(cls=ActionGroup, help="List and manage BIOSPHIR projects.")
-app.add_typer(projects_app, name="projects", context_settings={"help_option_names": ["--help"]})
+    """Show all BIOSPHIR commands."""
+    typer.echo(ctx.find_root().get_help())
 
 
 def unmarked_workspace_folders() -> list[Path]:
@@ -272,15 +265,13 @@ def unmarked_workspace_folders() -> list[Path]:
     ]
 
 
-@projects_app.callback(invoke_without_command=True)
+@app.command("--projects", context_settings={"help_option_names": ["--help"]})
 def projects(
-    ctx: typer.Context,
     roots: Annotated[
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
 ) -> None:
-    if ctx.invoked_subcommand is not None:
-        return
+    """List folders containing a .biosphir marker."""
     for folder in unmarked_workspace_folders():
         error_console.print(
             Text(f"Warning: Workspace folder has no .biosphir file: {folder}", style="yellow")
@@ -342,7 +333,7 @@ def open_project(project: str) -> None:
     """Open a project folder in the file manager."""
     entry = discover_projects().get(project.lower())
     if entry is None:
-        fail(f"Unknown project {project!r}. Run biosphir projects for IDs.")
+        fail(f"Unknown project {project!r}. Run biosphir --projects for IDs.")
     path = project_path(entry).absolute()
     if not path.is_dir():
         fail(f"Project folder missing: {path}")
@@ -375,9 +366,21 @@ def marker_defaults(folder: Path) -> dict[str, str]:
 @app.command("--plant", context_settings={"help_option_names": ["--help"]})
 def plant(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
-    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
+    folder: Annotated[
+        str, typer.Argument(help="Folder path or BIOSPHIR_WORKSPACE for bulk planting.")
+    ] = ".",
+    no_confirm: Annotated[
+        bool, typer.Option("--no-confirm", help="Skip confirmation when planting across the workspace.")
+    ] = False,
 ) -> None:
-    """Create a .biosphir marker in an existing folder."""
+    """Create a .biosphir marker in a folder or across the workspace."""
+    if folder == "BIOSPHIR_WORKSPACE":
+        plant_workspace(marker, no_confirm)
+        return
+    plant_marker(marker, Path(folder))
+
+
+def plant_marker(marker: str, folder: Path) -> None:
     target = marker_path(marker, folder)
     try:
         with target.open("x", encoding="utf-8") as file:
@@ -393,14 +396,7 @@ def plant(
         console.print(Text(f"Created {target}"))
 
 
-@projects_app.command("--plant")
-def plant_workspace(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
-    no_confirm: Annotated[
-        bool, typer.Option("--no-confirm", help="Create markers without prompting.")
-    ] = False,
-) -> None:
-    """Create markers in unmarked folders directly under the workspace."""
+def plant_workspace(marker: str, no_confirm: bool) -> None:
     workspace = workspace_path()
     marker_path(marker, workspace)
     folders = unmarked_workspace_folders()
@@ -417,7 +413,7 @@ def plant_workspace(
     failed = False
     for folder in folders:
         try:
-            plant(marker, folder)
+            plant_marker(marker, folder)
         except typer.Exit:
             failed = True
     if failed:
@@ -449,15 +445,15 @@ def find_project_marker(project_id: str) -> Path:
     return matches[0]
 
 
-@projects_app.command("--select")
+@app.command("--select", context_settings={"help_option_names": ["--help"]})
 def select_project(
     project_id: Annotated[str, typer.Argument(help="Project ID to select in interactive mode.")],
 ) -> None:
     """Select a project at the biosphir prompt."""
-    fail("Start interactive mode with biosphir, then run projects --select PROJECT_ID.")
+    fail("Start interactive mode with biosphir, then run --select PROJECT_ID.")
 
 
-@projects_app.command("--run")
+@app.command("--run", context_settings={"help_option_names": ["--help"]})
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],
     script: Annotated[Path, typer.Argument(help="Python script relative to the project folder.")],
@@ -499,7 +495,7 @@ class RenameField(str, Enum):
     PROJECT_NAME = "PROJECT_NAME"
 
 
-@projects_app.command("--rename")
+@app.command("--rename", context_settings={"help_option_names": ["--help"]})
 def rename_project(
     project_id: Annotated[str, typer.Argument(help="Current project ID.")],
     field: Annotated[RenameField, typer.Argument(help="Project field to change.")],
@@ -531,14 +527,25 @@ def rename_project(
     typer.echo(f"Updated {field.value} for {project_id} to {value}")
 
 
-@projects_app.command("--delete")
-def delete_projects(
-    project_ids: Annotated[list[str], typer.Argument(help="Project IDs to delete.")],
+@app.command("--delete", context_settings={"help_option_names": ["--help"]})
+def delete(
+    targets: Annotated[
+        list[str], typer.Argument(help="Project IDs, or .biosphir followed by an optional folder path.")
+    ],
     no_confirm: Annotated[
-        bool, typer.Option("--no-confirm", help="Delete without prompting.")
+        bool, typer.Option("--no-confirm", help="Delete project folders without prompting.")
     ] = False,
 ) -> None:
-    """Permanently delete selected project folders and their contents."""
+    """Delete project folders permanently or remove a .biosphir marker."""
+    if targets[0] == ".biosphir":
+        if len(targets) > 2:
+            fail("Provide at most one folder path after .biosphir.")
+        delete_marker(Path(targets[1]) if len(targets) == 2 else Path("."))
+        return
+    delete_projects(targets, no_confirm)
+
+
+def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
     matches: dict[str, list[Path]] = {
         key: [] for key in dict.fromkeys(value.strip().lower() for value in project_ids)
     }
@@ -584,7 +591,7 @@ def delete_projects(
         typer.echo(f"Deleted {folder}")
 
 
-@projects_app.command("--clone")
+@app.command("--clone", context_settings={"help_option_names": ["--help"]})
 def clone_project(
     project: Annotated[str, typer.Argument(help="Project ID or BIOSPHIR_WORKSPACE.")],
     destination: Annotated[
@@ -641,7 +648,7 @@ def clone_project(
     typer.echo(f"Cloned {source} to {target}")
 
 
-@projects_app.command("--collect")
+@app.command("--collect", context_settings={"help_option_names": ["--help"]})
 def collect_workspace(
     no_confirm: Annotated[
         bool, typer.Option("--no-confirm", help="Move projects without prompting.")
@@ -734,13 +741,8 @@ def check(
     console.print(Text(f"Found {target}"))
 
 
-@app.command("--delete", context_settings={"help_option_names": ["--help"]})
-def delete(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
-    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
-) -> None:
-    """Delete the .biosphir file in a folder."""
-    target = marker_path(marker, folder)
+def delete_marker(folder: Path) -> None:
+    target = marker_path(".biosphir", folder)
     if not target.is_file():
         fail(f"Marker file not found: {target}")
     try:

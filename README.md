@@ -4,21 +4,21 @@ An internal developer toolkit for Windows, built with Python, Typer, and Rich.
 
 ## Command syntax
 
-Use `biosphir [subject] --action [target] [path]`. For example, run
-`biosphir projects --clone BIOSPHIR_WORKSPACE` or `biosphir --plant .biosphir`.
-Use `biosphir projects` to list projects and `biosphir --help` to see all actions.
+Use `biosphir --action [target] [path]`. For example, run
+`biosphir --clone BIOSPHIR_WORKSPACE` or `biosphir --plant .biosphir`.
+Use `biosphir --projects` to list projects and `biosphir --help` to see all actions.
 
 ## Interactive mode
 
 Run `biosphir` in CMD or PowerShell to open the `biosphir>` prompt. Type commands
-such as `projects`, `--help`, or `--check .biosphir "D:\My Projects\Demo"`.
+such as `--projects`, `--help`, or `--check .biosphir "D:\My Projects\Demo"`.
 Type `--exit` or `--quit` to return to your terminal. Commands such as
-`biosphir projects` also work directly from CMD or PowerShell.
+`biosphir --projects` also work directly from CMD or PowerShell.
 
 Select a project once per interactive session to run its scripts:
 
 ```text
-biosphir> projects --select my-project
+biosphir> --select my-project
 biosphir[my-project]> --run main.py
 ```
 
@@ -43,11 +43,11 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | Command | What it does |
 | --- | --- |
 | `biosphir` | Start interactive mode in a terminal |
-| `biosphir projects` | List folders with a .biosphir marker |
+| `biosphir --projects` | List folders with a .biosphir marker |
 | `biosphir --open notcher` | Open the Notcher folder in File Explorer |
 | `biosphir --doctor` | Check Python, Git, VS Code, workspace, and registry |
 | `biosphir --version` | Show the installed CLI version |
-| `biosphir --help` | Show all commands and project subcommands |
+| `biosphir --help` | Show all commands |
 | `biosphir --info` | Show version and configuration paths |
 
 ## Automatic project discovery
@@ -92,7 +92,7 @@ name as its ID. For a stable ID and custom display name, use JSON:
 {"id": "my-project", "name": "My Project"}
 ```
 
-The `projects` command lists only folders with a `.biosphir` marker. It uses
+The `--projects` command lists only folders with a `.biosphir` marker. It uses
 the same recursive search and repeatable `--root` option as `discover` and
 marks entries without a readable ID as `Review`. It warns about immediate
 workspace subfolders that lack a marker. Commit the marker to share
@@ -137,32 +137,32 @@ To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) 
 
 
 To mark all unmarked folders directly under the workspace, run
-`biosphir projects --plant .biosphir` and confirm the listed folders.
-Use `biosphir projects --plant .biosphir --no-confirm` to skip the prompt.
+`biosphir --plant .biosphir BIOSPHIR_WORKSPACE` and confirm the listed folders.
+Use `biosphir --plant .biosphir BIOSPHIR_WORKSPACE --no-confirm` to skip the prompt.
 
 
-Use `biosphir projects --collect` to preview and confirm moves into the workspace.
+Use `biosphir --collect` to preview and confirm moves into the workspace.
 Add `--no-confirm` to skip the prompt. Moves use the default discovery locations
 and keep nested projects inside their parent project. A destination conflict
 stops the operation before moving any folders. Moves require the source and
 workspace to be on the same volume.
 
 
-Use `biosphir projects --delete project-id another-id` to permanently delete
+Use `biosphir --delete project-id another-id` to permanently delete
 the selected project folders and their contents. The command lists the paths
 and asks for confirmation. Add `--no-confirm` to skip the prompt.
 Missing or duplicate IDs stop the command before deletion begins.
 
 ```powershell
-biosphir projects --rename "project-id" PROJECT_ID "new-project-id"
-biosphir projects --rename "project-id" PROJECT_NAME "New Project Name"
+biosphir --rename "project-id" PROJECT_ID "new-project-id"
+biosphir --rename "project-id" PROJECT_NAME "New Project Name"
 ```
 
 The selected field is saved in `.biosphir`. IDs are stored in lowercase and
 must be unique across discovered projects. The folder path stays the same.
 After changing the ID of the selected project, select it again using the new ID.
 
-Run `biosphir projects --run project-id main.py` to execute a Python script from
+Run `biosphir --run project-id main.py` to execute a Python script from
 the project folder. It uses the project's `.venv` when available and otherwise
 uses the base Python installation behind the CLI.
 
@@ -178,10 +178,10 @@ BIOSPHIR and checking `biosphir --version`.
 ## Clone a project or workspace
 
 ```powershell
-biosphir projects --clone BIOSPHIR_WORKSPACE
-biosphir projects --clone BIOSPHIR_WORKSPACE "D:\Backups\BIOSPHIR"
-biosphir projects --clone "project-id"
-biosphir projects --clone "project-id" "D:\Backups\Project Copy"
+biosphir --clone BIOSPHIR_WORKSPACE
+biosphir --clone BIOSPHIR_WORKSPACE "D:\Backups\BIOSPHIR"
+biosphir --clone "project-id"
+biosphir --clone "project-id" "D:\Backups\Project Copy"
 ```
 
 With no destination, a workspace clone creates a folder ending in `-copy`

@@ -38,7 +38,7 @@ def test_projects(workspace, monkeypatch):
     folder = workspace / "group" / "marked"
     folder.mkdir(parents=True)
     (folder / ".biosphir").write_text('{"id":"demo","name":"Demo project"}')
-    result = runner.invoke(cli.app, ["projects", "--root", str(workspace)])
+    result = runner.invoke(cli.app, ["--projects", "--root", str(workspace)])
     assert result.exit_code == 0
     assert "Notcher" not in result.stdout
     assert "Local repo" in result.stdout
@@ -91,7 +91,7 @@ def test_discovery(workspace, monkeypatch):
     folder.mkdir()
     marker = folder / ".biosphir"
     marker.touch()
-    assert "Review" in runner.invoke(cli.app, ["projects", "--root", str(workspace)]).stdout
+    assert "Review" in runner.invoke(cli.app, ["--projects", "--root", str(workspace)]).stdout
 
     marker.write_text('{"id": "new", "name": "New Display Name"}', encoding="utf-8")
     launched = []
@@ -107,7 +107,7 @@ def test_registered_folder_with_marker_is_listed_once(workspace):
     folder = workspace / "Notcher folder"
     folder.mkdir()
     (folder / ".biosphir").touch()
-    result = runner.invoke(cli.app, ["projects"])
+    result = runner.invoke(cli.app, ["--projects"])
     assert result.exit_code == 0
     assert result.stdout.count("Review") == 1
 
@@ -232,7 +232,7 @@ def test_projects_plant(workspace, options, answer, created):
     existing.mkdir()
     (existing / ".biosphir").write_text('{"id":"keep"}')
     result = runner.invoke(
-        cli.app, ["projects", "--plant", ".biosphir", *options], input=answer
+        cli.app, ["--plant", ".biosphir", "BIOSPHIR_WORKSPACE", *options], input=answer
     )
     assert result.exit_code == 0
     marker = folder / ".biosphir"
@@ -255,7 +255,7 @@ def test_collect_workspace(workspace, monkeypatch, options, answer, moved):
     nested.mkdir()
     (nested / ".biosphir").touch()
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [source, nested])
-    result = runner.invoke(cli.app, ["projects", "--collect", *options], input=answer)
+    result = runner.invoke(cli.app, ["--collect", *options], input=answer)
     assert result.exit_code == 0
     assert source.exists() != moved
     assert (workspace / source.name / "nested" / ".biosphir").is_file() == moved
@@ -274,7 +274,7 @@ def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
         (folder / "content.txt").touch()
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: folders)
     result = runner.invoke(
-        cli.app, ["projects", "--delete", "first", "second", *options], input=answer
+        cli.app, ["--delete", "first", "second", *options], input=answer
     )
     assert result.exit_code == 0, result.output
     assert all(folder.exists() != deleted for folder in folders)
@@ -296,7 +296,7 @@ def test_rename_project(workspace, monkeypatch, field, value, expected_id, expec
     (other / ".biosphir").write_text('{"id":"taken"}')
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder, other])
 
-    result = runner.invoke(cli.app, ["projects", "--rename", "DEMO", field, value])
+    result = runner.invoke(cli.app, ["--rename", "DEMO", field, value])
     if expected_id is None:
         assert result.exit_code == 1, result.output
         assert "already in use" in result.output
@@ -335,7 +335,7 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     monkeypatch.chdir(current)
     default_parent = current if whole_workspace else source.parent
     target = tmp_path / "Copy with spaces" if explicit else default_parent / (source.name + "-copy")
-    args = ["projects", "--clone", "BIOSPHIR_WORKSPACE" if whole_workspace else "demo"]
+    args = ["--clone", "BIOSPHIR_WORKSPACE" if whole_workspace else "demo"]
     if explicit:
         args.append(str(target))
     result = runner.invoke(cli.app, args)
@@ -346,7 +346,7 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     assert runner.invoke(cli.app, args).exit_code == 1
 
 
-@pytest.mark.parametrize("args", [["plant", ".biosphir"], ["projects", "plant", ".biosphir"]])
+@pytest.mark.parametrize("args", [["plant", ".biosphir"], ["projects", "--plant", ".biosphir"]])
 def test_actions_require_prefix(args):
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 2
@@ -358,6 +358,6 @@ def test_action_help():
     assert result.exit_code == 0
     assert "--plant" in result.output
     assert "--clone" in result.output
-    result = runner.invoke(cli.app, ["projects", "--clone", "--help"])
+    result = runner.invoke(cli.app, ["--clone", "--help"])
     assert result.exit_code == 0
     assert "BIOSPHIR_WORKSPACE" in result.output
