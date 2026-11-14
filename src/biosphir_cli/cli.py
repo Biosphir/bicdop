@@ -55,6 +55,48 @@ def project_path(entry: dict[str, str]) -> Path:
     return workspace_path() / Path(entry["path"]).expanduser()
 
 
+def discover_projects() -> dict[str, dict[str, str]]:
+    entries = load_projects()
+    workspace = workspace_path()
+    if not workspace.is_dir():
+        return entries
+
+    for folder in sorted(workspace.iterdir(), key=lambda path: path.name.lower()):
+        marker = folder / ".biosphir"
+        if not folder.is_dir() or not marker.is_file():
+            continue
+        try:
+            content = marker.read_text(encoding="utf-8-sig").strip()
+            metadata = json.loads(content) if content else {}
+            if not isinstance(metadata, dict) or any(
+                not isinstance(metadata[field], str) or not metadata[field].strip()
+                for field in ("id", "name")
+                if field in metadata
+            ):
+                raise ValueError("expected a JSON object with optional non-empty id and name")
+        except (OSError, ValueError) as exc:
+            error_console.print(Text(f"Ignoring {marker}: {exc}", style="yellow"))
+            continue
+
+        matching = [
+            key for key, entry in entries.items()
+            if project_path(entry).resolve() == folder.resolve()
+        ]
+        default_id = matching[0] if matching else folder.name
+        key = metadata.get("id", default_id).strip().lower()
+        if key in entries and key not in matching:
+            error_console.print(Text(f"Ignoring {marker}: project ID {key!r} is already in use.", style="yellow"))
+            continue
+
+        default_name = entries[matching[0]]["name"] if matching else folder.name
+        for previous_key in matching:
+            if previous_key != key:
+                del entries[previous_key]
+        entries[key] = {"name": metadata.get("name", default_name).strip(), "path": str(folder.absolute())}
+
+    return entries
+
+
 def editor_path() -> str | None:
     if os.name == "nt":
         executable = shutil.which("Code.exe")
@@ -92,9 +134,9 @@ def main(
 
 @app.command()
 def projects() -> None:
-    """List registered projects and their local status."""
+    """List registered and discovered projects."""
     table = Table("Project ID", "Name", "Local repo", "Local status")
-    for key, entry in load_projects().items():
+    for key, entry in discover_projects().items():
         folder = project_path(entry)
         status = "Available" if folder.is_dir() else "Missing"
         table.add_row(Text(key), Text(entry["name"]), Text(folder.name), status)
@@ -103,8 +145,8 @@ def projects() -> None:
 
 @app.command("open")
 def open_project(project: str) -> None:
-    """Open a registered project folder in VS Code."""
-    entry = load_projects().get(project.lower())
+    """Open a project folder in VS Code."""
+    entry = discover_projects().get(project.lower())
     if entry is None:
         fail(f"Unknown project {project!r}. Run biosphir projects for IDs.")
     path = project_path(entry).absolute()

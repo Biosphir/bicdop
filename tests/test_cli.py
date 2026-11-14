@@ -78,3 +78,30 @@ def test_doctor(workspace, monkeypatch, editor):
     assert result.exit_code == (0 if editor else 1)
     assert "VS Code" in result.stdout
     assert "1 registered" in result.stdout
+
+
+def test_discovery(workspace, monkeypatch):
+    folder = workspace / "New Project"
+    folder.mkdir()
+    marker = folder / ".biosphir"
+    marker.touch()
+    assert "new project" in runner.invoke(cli.app, ["projects"]).stdout
+
+    marker.write_text('{"id": "new", "name": "New Display Name"}', encoding="utf-8")
+    launched = []
+    monkeypatch.setattr(cli, "editor_path", lambda: "Code.exe")
+    monkeypatch.setattr(cli.subprocess, "Popen", launched.append)
+    result = runner.invoke(cli.app, ["open", "new"])
+    assert result.exit_code == 0
+    assert "New Display Name" in result.stdout
+    assert launched == [["Code.exe", str(folder)]]
+
+
+def test_registered_folder_with_marker_is_listed_once(workspace):
+    folder = workspace / "Notcher folder"
+    folder.mkdir()
+    (folder / ".biosphir").touch()
+    result = runner.invoke(cli.app, ["projects"])
+    assert result.exit_code == 0
+    assert result.stdout.count("Notcher folder") == 1
+    assert "Available" in result.stdout

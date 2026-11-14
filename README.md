@@ -25,6 +25,21 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | `biosphir --version` | Show the installed CLI version |
 | `biosphir info` | Show version and configuration paths |
 
+## Automatic project discovery
+
+Put a `.biosphir` file in a project folder directly under the workspace.
+An empty file uses the folder name as its display name and the lowercase folder
+name as its ID. For a stable ID and custom display name, use JSON:
+
+```json
+{"id": "my-project", "name": "My Project"}
+```
+
+Both `projects` and `open` use discovery. If the folder is already registered,
+it appears once and retains the registry ID and name unless the marker overrides
+them. IDs must be unique across folders. Commit the marker to share it with
+everyone who clones the project.
+
 ## Project registry
 
 The bundled registry includes Notcher, Macro Pad Z1, Gwen, and the BIOSPHIR Website. Relative project paths resolve under `~/Documents/GitHub` by default. Set `$env:BIOSPHIR_WORKSPACE = 'D:\Projects'` to use another workspace in the current shell.
