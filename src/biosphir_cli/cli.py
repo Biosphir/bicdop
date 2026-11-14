@@ -251,7 +251,8 @@ def interactive_shell() -> None:
     selected_project = None
     while True:
         try:
-            prompt = f"biosphir[{selected_project}]> " if selected_project else "biosphir> "
+            project = f"[{selected_project}]" if selected_project else ""
+            prompt = f"biosphir{project} {Path.cwd()}> "
             line = input(prompt).strip()
         except EOFError:
             typer.echo()
