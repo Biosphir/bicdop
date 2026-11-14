@@ -35,6 +35,13 @@ biosphir plant .biosphir
 biosphir plant .biosphir "D:\Projects\My Project"
 ```
 
+Use `check` to verify the marker exists. It exits with status 1 if the marker is missing.
+
+```powershell
+biosphir check .biosphir
+biosphir check .biosphir "D:\Projects\My Project"
+```
+
 Discovery scans project folders directly under the workspace.
 An empty file uses the folder name as its display name and the lowercase folder
 name as its ID. For a stable ID and custom display name, use JSON:

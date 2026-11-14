@@ -131,3 +131,22 @@ def test_plant_rejects_missing_folder(tmp_path):
     result = runner.invoke(cli.app, ["plant", ".biosphir", str(tmp_path / "missing")])
     assert result.exit_code == 1
     assert "Target folder does not exist" in result.stderr
+
+
+@pytest.mark.parametrize("explicit_folder", [False, True])
+def test_check(tmp_path, monkeypatch, explicit_folder):
+    args = ["check", ".biosphir"]
+    if explicit_folder:
+        args.append(str(tmp_path))
+    else:
+        monkeypatch.chdir(tmp_path)
+    marker = tmp_path / ".biosphir"
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 1
+    assert "Marker file not found" in result.stderr
+    assert not marker.exists()
+
+    marker.touch()
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0
+    assert "Found" in result.stdout

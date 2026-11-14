@@ -162,19 +162,23 @@ def open_project(project: str) -> None:
     console.print(Text(f"Requested VS Code to open {entry['name']}."))
 
 
-@app.command()
-def plant(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
-    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
-) -> None:
-    """Create a .biosphir marker in an existing folder."""
+def marker_path(marker: str, folder: Path) -> Path:
     if marker != ".biosphir":
         fail("Use .biosphir as the marker filename.")
     folder = folder.expanduser().absolute()
     if not folder.is_dir():
         fail(f"Target folder does not exist or is not a directory: {folder}")
 
-    target = folder / marker
+    return folder / marker
+
+
+@app.command()
+def plant(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
+) -> None:
+    """Create a .biosphir marker in an existing folder."""
+    target = marker_path(marker, folder)
     try:
         with target.open("x", encoding="utf-8"):
             pass
@@ -186,6 +190,18 @@ def plant(
         fail(f"Could not create marker {target}: {exc}")
     else:
         console.print(Text(f"Created {target}"))
+
+
+@app.command()
+def check(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
+) -> None:
+    """Check whether a folder contains a .biosphir file."""
+    target = marker_path(marker, folder)
+    if not target.is_file():
+        fail(f"Marker file not found: {target}")
+    console.print(Text(f"Found {target}"))
 
 
 @app.command()
