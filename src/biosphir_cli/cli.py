@@ -180,7 +180,7 @@ def interactive_shell() -> None:
             if selected_project is None:
                 error_console.print("Select a project first with projects select PROJECT_ID.")
                 continue
-            args = ["projects", "run", selected_project, *args[1:]]
+            args = ["projects", "run", "--background", selected_project, *args[1:]]
         if args:
             try:
                 subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
@@ -397,6 +397,9 @@ def select_project(
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],
     script: Annotated[Path, typer.Argument(help="Python script relative to the project folder.")],
+    background: Annotated[
+        bool, typer.Option("--background/--wait", help="Run separately or wait for the script to finish.")
+    ] = False,
 ) -> None:
     """Run a Python script from a project folder."""
     folder = find_project_marker(project_id).parent
@@ -407,8 +410,21 @@ def run_project(
     executable = folder / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not executable.is_file():
         executable = Path(getattr(sys, "_base_executable", None) or sys.executable)
+    command = [str(executable), str(target)]
     try:
-        result = subprocess.run([str(executable), str(target)], cwd=folder, check=False)
+        if background:
+            process = subprocess.Popen(
+                command,
+                cwd=folder,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.DETACHED_PROCESS if os.name == "nt" else 0,
+                start_new_session=os.name != "nt",
+            )
+            typer.echo(f"Started {target.name} (PID {process.pid}). Use --wait to see script output.")
+            return
+        result = subprocess.run(command, cwd=folder, check=False)
     except OSError as exc:
         fail(f"Could not run {target}: {exc}")
     raise typer.Exit(result.returncode)

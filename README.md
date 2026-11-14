@@ -16,6 +16,10 @@ biosphir> projects select my-project
 biosphir[my-project]> run main.py
 ```
 
+The interactive shortcut returns to the prompt immediately, and `exit` leaves
+the launched program running. Use `run main.py --wait` to see script output
+and wait for it to finish.
+
 ## Install in PowerShell
 
 Install Python 3.10 or newer and Git. Install VS Code to use `open`.
