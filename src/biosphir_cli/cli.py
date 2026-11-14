@@ -276,35 +276,10 @@ def delete(
     console.print(Text(f"Deleted {target}"))
 
 
-@app.command()
-def show(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
-) -> None:
-    """List marked projects directly under the workspace."""
-    if marker != ".biosphir":
-        fail("Use .biosphir as the marker filename.")
-
-    workspace = workspace_path()
-    found = False
-    for entry in discover_projects().values():
-        folder = project_path(entry).absolute()
-        if folder.parent == workspace.absolute() and (folder / marker).is_file():
-            typer.echo(str(folder))
-            found = True
-    if not found:
-        typer.echo(f"No .biosphir projects found in {workspace}.")
-
-
-@app.command()
-def discover(
-    roots: Annotated[
-        list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
-    ] = None,
-) -> None:
-    """Find marked projects recursively and flag duplicate IDs."""
+def find_marked_folders(roots: list[Path] | None) -> list[Path]:
     defaults = [workspace_path(), *(Path.home() / name for name in ("Documents", "Downloads", "Desktop"))]
     search_roots = roots or [root for root in defaults if root.is_dir()]
-    matches: dict[Path, tuple[str, str]] = {}
+    matches: set[Path] = set()
 
     def report_error(error: OSError) -> None:
         error_console.print(Text(f"Skipped: {error}", style="yellow"))
@@ -323,19 +298,50 @@ def discover(
             ]
             if not any(os.path.normcase(name) == ".biosphir" for name in files):
                 continue
-            marker = folder / ".biosphir"
-            if folder in matches or not marker.is_file():
+            if (folder / ".biosphir").is_file():
+                matches.add(folder)
+
+    return sorted(matches)
+
+
+@app.command()
+def show(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    roots: Annotated[
+        list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
+    ] = None,
+) -> None:
+    """Print every folder containing a .biosphir file."""
+    if marker != ".biosphir":
+        fail("Use .biosphir as the marker filename.")
+    folders = find_marked_folders(roots)
+    for folder in folders:
+        typer.echo(str(folder))
+    if not folders:
+        typer.echo("No .biosphir projects found.")
+
+
+@app.command()
+def discover(
+    roots: Annotated[
+        list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
+    ] = None,
+) -> None:
+    """Find marked projects recursively and flag duplicate IDs."""
+    matches: dict[Path, tuple[str, str]] = {}
+    for folder in find_marked_folders(roots):
+        marker = folder / ".biosphir"
+        try:
+            content = marker.read_text(encoding="utf-8-sig").strip()
+            metadata = json.loads(content) if content else {}
+            project_id = metadata.get("id") if isinstance(metadata, dict) else None
+            if not isinstance(project_id, str) or not project_id.strip():
+                matches[folder] = ("", "Review: missing ID")
                 continue
-            try:
-                content = marker.read_text(encoding="utf-8-sig").strip()
-                metadata = json.loads(content) if content else {}
-                project_id = metadata.get("id") if isinstance(metadata, dict) else None
-                if not isinstance(project_id, str) or not project_id.strip():
-                    matches[folder] = ("", "Review: missing ID")
-                    continue
-                matches[folder] = (project_id.strip().lower(), "Detected")
-            except (OSError, ValueError):
-                matches[folder] = ("", "Review: unreadable or invalid JSON")
+            matches[folder] = (project_id.strip().lower(), "Detected")
+        except (OSError, ValueError):
+            matches[folder] = ("", "Review: unreadable or invalid JSON")
+
 
     if not matches:
         typer.echo("No .biosphir projects found.")

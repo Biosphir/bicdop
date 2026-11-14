@@ -49,8 +49,9 @@ biosphir delete .biosphir
 biosphir delete .biosphir "D:\Projects\My Project"
 ```
 
-Run `biosphir show .biosphir` to print the paths of marked projects directly
-under the configured workspace.
+Run `biosphir show .biosphir` to print the paths of marked folders recursively.
+It uses the same search locations and repeatable `--root` option as `discover`,
+and includes markers with missing or invalid metadata.
 
 Use `biosphir fix .biosphir` to repair the current folder's marker, or pass a
 folder path as the final argument. Repair fills missing fields and rebuilds

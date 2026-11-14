@@ -178,9 +178,9 @@ def test_show(workspace):
     nested = workspace / "outer" / "nested"
     nested.mkdir(parents=True)
     (nested / ".biosphir").touch()
-    result = runner.invoke(cli.app, ["show", ".biosphir"])
+    result = runner.invoke(cli.app, ["show", ".biosphir", "--root", str(workspace)])
     assert result.exit_code == 0
-    assert result.stdout.splitlines() == [str(marked)]
+    assert result.stdout.splitlines() == [str(marked), str(nested)]
 
 
 def test_discover_reports_duplicates_and_review(tmp_path):
