@@ -280,15 +280,31 @@ def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
     assert all(folder.exists() != deleted for folder in folders)
 
 
-def test_rename_project(workspace, monkeypatch):
+@pytest.mark.parametrize(("field", "value", "expected_id", "expected_name"), [
+    ("PROJECT_ID", "New Project ID", "new project id", "Old name"),
+    ("PROJECT_NAME", "New name", "demo", "New name"),
+    ("PROJECT_ID", "TAKEN", None, None),
+])
+def test_rename_project(workspace, monkeypatch, field, value, expected_id, expected_name):
     folder = workspace / "original"
     folder.mkdir()
     marker = folder / ".biosphir"
-    marker.write_text('{"id":"demo","name":"Old name","extra":true}')
-    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder])
-    result = runner.invoke(cli.app, ["projects", "--rename", "DEMO"], input="New name\n")
-    assert result.exit_code == 0, result.output
-    assert json.loads(marker.read_text()) == {"id": "demo", "name": "New name", "extra": True}
+    original = {"id": "demo", "name": "Old name", "extra": True}
+    marker.write_text(json.dumps(original))
+    other = workspace / "other"
+    other.mkdir()
+    (other / ".biosphir").write_text('{"id":"taken"}')
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder, other])
+
+    result = runner.invoke(cli.app, ["projects", "--rename", "DEMO", field, value])
+    if expected_id is None:
+        assert result.exit_code == 1, result.output
+        assert "already in use" in result.output
+        assert json.loads(marker.read_text()) == original
+    else:
+        assert result.exit_code == 0, result.output
+        assert json.loads(marker.read_text()) == {"id": expected_id, "name": expected_name, "extra": True}
+        assert cli.find_project_marker(expected_id) == marker
 
 
 def test_set_workspace(tmp_path, monkeypatch):

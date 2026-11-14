@@ -153,8 +153,14 @@ the selected project folders and their contents. The command lists the paths
 and asks for confirmation. Add `--no-confirm` to skip the prompt.
 Missing or duplicate IDs stop the command before deletion begins.
 
-Run `biosphir projects --rename project-id` and enter a new display name.
-The name is saved in `.biosphir`. The project ID and folder path stay the same.
+```powershell
+biosphir projects --rename "project-id" PROJECT_ID "new-project-id"
+biosphir projects --rename "project-id" PROJECT_NAME "New Project Name"
+```
+
+The selected field is saved in `.biosphir`. IDs are stored in lowercase and
+must be unique across discovered projects. The folder path stays the same.
+After changing the ID of the selected project, select it again using the new ID.
 
 Run `biosphir projects --run project-id main.py` to execute a Python script from
 the project folder. It uses the project's `.venv` when available and otherwise

@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 from collections import Counter
+from enum import Enum
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -423,7 +424,7 @@ def plant_workspace(
         raise typer.Exit(1)
 
 
-def find_project_marker(project_id: str) -> Path:
+def matching_project_markers(project_id: str) -> list[Path]:
     key = project_id.strip().lower()
     matches = []
     for folder in find_marked_folders(None):
@@ -435,6 +436,11 @@ def find_project_marker(project_id: str) -> Path:
         if key and marker_field(metadata, "id").lower() == key:
             matches.append(marker)
 
+    return matches
+
+
+def find_project_marker(project_id: str) -> Path:
+    matches = matching_project_markers(project_id)
     if not matches:
         fail(f"Project ID not found: {project_id!r}")
     if len(matches) > 1:
@@ -488,27 +494,41 @@ def run_project(
     raise typer.Exit(result.returncode)
 
 
+class RenameField(str, Enum):
+    PROJECT_ID = "PROJECT_ID"
+    PROJECT_NAME = "PROJECT_NAME"
+
+
 @projects_app.command("--rename")
 def rename_project(
-    project_id: Annotated[str, typer.Argument(help="Project ID to rename.")],
+    project_id: Annotated[str, typer.Argument(help="Current project ID.")],
+    field: Annotated[RenameField, typer.Argument(help="Project field to change.")],
+    value: Annotated[str, typer.Argument(help="New value for the selected field.")],
 ) -> None:
-    """Change a project's display name."""
+    """Change a project's ID or display name."""
+    value = value.strip()
+    if not value:
+        fail(f"{field.value} cannot be empty.")
+
     marker = find_project_marker(project_id)
     key = project_id.strip().lower()
-    typer.echo(str(marker.parent))
-    name = typer.prompt("New project name").strip()
-    if not name:
-        fail("Project name cannot be empty.")
+    if field == RenameField.PROJECT_ID:
+        value = value.lower()
+        if value != key and matching_project_markers(value):
+            fail(f"Project ID already in use: {value!r}")
+        metadata_key = "id"
+    else:
+        metadata_key = "name"
 
     try:
         metadata = read_marker(marker)
         if marker.is_symlink() or marker_field(metadata, "id").lower() != key:
             fail(f"Project marker changed or is a symbolic link: {marker}")
-        metadata["name"] = name
+        metadata[metadata_key] = value
         write_marker(marker, metadata)
     except (OSError, ValueError) as exc:
         fail(f"Could not rename project {project_id!r}: {exc}")
-    typer.echo(f"Renamed {project_id} to {name}")
+    typer.echo(f"Updated {field.value} for {project_id} to {value}")
 
 
 @projects_app.command("--delete")
