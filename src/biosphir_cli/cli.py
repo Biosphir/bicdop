@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import typer
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 from rich.text import Text
 
@@ -581,7 +582,28 @@ def clone_project(
         fail(f"Destination parent folder does not exist: {target.parent}")
 
     try:
-        shutil.copytree(source, target, symlinks=True)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("Cloning"),
+            TextColumn("{task.completed:.0f} copied"),
+            TextColumn("{task.fields[filename]}", markup=False),
+            TimeElapsedColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Cloning", total=None, filename="")
+            copied = 0
+
+            def copy_file(original: str, destination: str) -> str:
+                nonlocal copied
+                progress.update(task, filename=Path(original).name, refresh=True)
+                result = shutil.copy2(original, destination)
+                copied += 1
+                progress.advance(task)
+                return result
+
+            shutil.copytree(source, target, symlinks=True, copy_function=copy_file)
+        typer.echo(f"Files copied: {copied}")
     except OSError as exc:
         fail(f"Could not clone {source} to {target}: {exc}")
     typer.echo(f"Cloned {source} to {target}")
