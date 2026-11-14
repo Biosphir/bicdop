@@ -133,7 +133,18 @@ def main(
     if ctx.invoked_subcommand is None:
         console.print(f"[bold blue]BIOSPHIR CLI v{version('biosphir-cli')}[/]")
         console.print("Internal Developer Toolkit")
-        console.print("Run biosphir --help for commands.")
+        console.print("Run biosphir help for all commands.")
+
+
+@app.command()
+def help(ctx: typer.Context) -> None:
+    """Show all commands, including project subcommands."""
+    root = ctx.find_root()
+    typer.echo(root.get_help())
+    typer.echo()
+    projects_command = root.command.get_command(root, "projects")
+    with projects_command.make_context("projects", [], parent=root) as projects_context:
+        typer.echo(projects_context.get_help())
 
 
 projects_app = typer.Typer(help="List and mark BIOSPHIR projects.")
