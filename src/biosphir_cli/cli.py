@@ -490,6 +490,47 @@ def setup_project(project_id: str) -> None:
     typer.echo(f"Python environment ready: {environment}")
 
 
+@app.command("--status", context_settings={"help_option_names": ["--help"]})
+def project_status(project_id: str) -> None:
+    """Show a project's location, Python files, and local Git status."""
+    folder = find_project_marker(project_id).parent
+    python = folder / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    typer.echo(f"Path: {folder}")
+    typer.echo(f"Python environment: {python if python.is_file() else 'Missing .venv'}")
+    for filename in ("main.py", "requirements.txt"):
+        typer.echo(f"{filename}: {'Found' if (folder / filename).is_file() else 'Missing'}")
+    if os.path.lexists(folder / ".git"):
+        try:
+            subprocess.run(
+                ["git", "status", "--short", "--branch"],
+                cwd=folder, check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            fail(f"Could not read Git status: {exc}")
+
+
+@app.command("--move", context_settings={"help_option_names": ["--help"]})
+def move_project(
+    project_id: str,
+    to: Annotated[Path, typer.Option("--to", help="Existing destination parent folder.")],
+) -> None:
+    """Move one project into an existing folder on the same volume."""
+    source = find_project_marker(project_id).parent.resolve()
+    parent = to.expanduser().resolve()
+    if not parent.is_dir():
+        fail(f"Destination folder does not exist: {parent}")
+    if parent.is_relative_to(source):
+        fail(f"Destination must be outside the project: {parent}")
+    target = parent / source.name
+    if os.path.lexists(target):
+        fail(f"Destination already exists: {target}")
+    try:
+        source.rename(target)
+    except OSError as exc:
+        fail(f"Could not move {source} to {target}: {exc}")
+    typer.echo(f"Moved {source} to {target}")
+
+
 @app.command("--run", context_settings={"help_option_names": ["--help"]})
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],

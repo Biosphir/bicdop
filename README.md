@@ -210,3 +210,10 @@ for the first project. Additional projects use their default destinations.
 Run `biosphir --setup project-id` to create or reuse the project's `.venv`
 and install dependencies from `requirements.txt`. Then use
 `biosphir --run project-id main.py`.
+
+Use `biosphir --status project-id` to check the project path, Python environment,
+common Python files, and local Git status.
+
+Use `biosphir --move project-id --to "D:\Projects"` to move the project into an
+existing parent folder on the same volume. The project keeps its folder name.
+Choose a location within the discovery roots to keep finding the project by ID.
