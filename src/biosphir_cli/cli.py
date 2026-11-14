@@ -345,6 +345,24 @@ def folder_size(folder: Path) -> str:
     return f"{filesize.decimal(total)}{' (partial)' if partial else ''}"
 
 
+@app.command("here", context_settings={"help_option_names": ["--help"]})
+def here() -> None:
+    """List folders in the current terminal directory."""
+    current = Path.cwd()
+    try:
+        folders = sorted(
+            (entry.name for entry in current.iterdir() if entry.is_dir()),
+            key=str.casefold,
+        )
+    except OSError as exc:
+        fail(f"Could not list folders in {current}: {exc}")
+    typer.echo(str(current))
+    for name in folders:
+        typer.echo(name)
+    if not folders:
+        typer.echo("No folders found.")
+
+
 @app.command("--projects", context_settings={"help_option_names": ["--help"]})
 def projects(
     roots: Annotated[
