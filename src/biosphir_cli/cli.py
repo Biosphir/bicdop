@@ -411,11 +411,14 @@ def marker_field(metadata: dict, field: str) -> str:
 
 @app.command("--open", context_settings={"help_option_names": ["--help"]})
 def open_project(project: str) -> None:
-    """Open a project folder in the file manager."""
-    entry = discover_projects().get(project.lower())
-    if entry is None:
-        fail(f"Unknown project {project!r}. Run biosphir --projects for IDs.")
-    path = project_path(entry).absolute()
+    """Open a project or BIOSPHIR_WORKSPACE in the file manager."""
+    if project == "BIOSPHIR_WORKSPACE":
+        path = workspace_path().absolute()
+    else:
+        entry = discover_projects().get(project.lower())
+        if entry is None:
+            fail(f"Unknown project {project!r}. Run biosphir --projects for IDs.")
+        path = project_path(entry).absolute()
     if not path.is_dir():
         fail(f"Project folder missing: {path}")
     file_manager = {"Windows": "explorer.exe", "Darwin": "open"}.get(
