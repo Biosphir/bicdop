@@ -205,6 +205,22 @@ def check(
 
 
 @app.command()
+def delete(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
+) -> None:
+    """Delete the .biosphir file in a folder."""
+    target = marker_path(marker, folder)
+    if not target.is_file():
+        fail(f"Marker file not found: {target}")
+    try:
+        target.unlink()
+    except OSError as exc:
+        fail(f"Could not delete marker {target}: {exc}")
+    console.print(Text(f"Deleted {target}"))
+
+
+@app.command()
 def doctor() -> None:
     """Check Python, Git, VS Code, workspace, and the registry."""
     entries = load_projects()

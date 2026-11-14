@@ -42,6 +42,13 @@ biosphir check .biosphir
 biosphir check .biosphir "D:\Projects\My Project"
 ```
 
+Use `delete` to remove the marker from the current folder or a specified folder.
+
+```powershell
+biosphir delete .biosphir
+biosphir delete .biosphir "D:\Projects\My Project"
+```
+
 Discovery scans project folders directly under the workspace.
 An empty file uses the folder name as its display name and the lowercase folder
 name as its ID. For a stable ID and custom display name, use JSON:
