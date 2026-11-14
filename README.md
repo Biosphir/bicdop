@@ -123,3 +123,6 @@ Use `biosphir projects delete project-id another-id` to permanently delete
 the selected project folders and their contents. The command lists the paths
 and asks for confirmation. Add `--no-confirm` to skip the prompt.
 Missing or duplicate IDs stop the command before deletion begins.
+
+Run `biosphir projects rename project-id` and enter a new display name.
+The name is saved in `.biosphir`. The project ID and folder path stay the same.

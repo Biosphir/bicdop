@@ -241,6 +241,21 @@ def read_marker(marker: Path) -> dict:
     return metadata
 
 
+def write_marker(target: Path, metadata: dict) -> None:
+    temp_path = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=target.parent, delete=False
+        ) as file:
+            temp_path = Path(file.name)
+            json.dump(metadata, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        temp_path.replace(target)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def marker_field(metadata: dict, field: str) -> str:
     value = metadata.get(field)
     return value.strip() if isinstance(value, str) else ""
@@ -331,6 +346,44 @@ def plant_workspace(
             failed = True
     if failed:
         raise typer.Exit(1)
+
+
+@projects_app.command("rename")
+def rename_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID to rename.")],
+) -> None:
+    """Change a project's display name."""
+    key = project_id.strip().lower()
+    matches = []
+    for folder in find_marked_folders(None):
+        marker = folder / ".biosphir"
+        try:
+            metadata = read_marker(marker)
+        except (OSError, ValueError):
+            continue
+        if key and marker_field(metadata, "id").lower() == key:
+            matches.append(marker)
+
+    if not matches:
+        fail(f"Project ID not found: {project_id!r}")
+    if len(matches) > 1:
+        fail(f"Ambiguous project ID {project_id!r}: " + ", ".join(map(str, matches)))
+
+    marker = matches[0]
+    typer.echo(str(marker.parent))
+    name = typer.prompt("New project name").strip()
+    if not name:
+        fail("Project name cannot be empty.")
+
+    try:
+        metadata = read_marker(marker)
+        if marker.is_symlink() or marker_field(metadata, "id").lower() != key:
+            fail(f"Project marker changed or is a symbolic link: {marker}")
+        metadata["name"] = name
+        write_marker(marker, metadata)
+    except (OSError, ValueError) as exc:
+        fail(f"Could not rename project {project_id!r}: {exc}")
+    typer.echo(f"Renamed {project_id} to {name}")
 
 
 @projects_app.command("delete")
@@ -444,7 +497,6 @@ def fix(
     if target.is_symlink():
         fail(f"Cannot repair a symbolic link: {target}")
 
-    temp_path = None
     try:
         try:
             metadata = json.loads(target.read_text(encoding="utf-8-sig"))
@@ -462,18 +514,9 @@ def fix(
         defaults = marker_defaults(target.parent)
         for key in missing:
             metadata[key] = defaults[key]
-        with NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=target.parent, delete=False
-        ) as file:
-            temp_path = Path(file.name)
-            json.dump(metadata, file, ensure_ascii=False, indent=2)
-            file.write("\n")
-        temp_path.replace(target)
+        write_marker(target, metadata)
     except OSError as exc:
         fail(f"Could not repair marker {target}: {exc}")
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
     console.print(Text(f"Repaired {target}"))
 
 

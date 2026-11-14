@@ -278,3 +278,14 @@ def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
     )
     assert result.exit_code == 0, result.output
     assert all(folder.exists() != deleted for folder in folders)
+
+
+def test_rename_project(workspace, monkeypatch):
+    folder = workspace / "original"
+    folder.mkdir()
+    marker = folder / ".biosphir"
+    marker.write_text('{"id":"demo","name":"Old name","extra":true}')
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder])
+    result = runner.invoke(cli.app, ["projects", "rename", "DEMO"], input="New name\n")
+    assert result.exit_code == 0, result.output
+    assert json.loads(marker.read_text()) == {"id": "demo", "name": "New name", "extra": True}
