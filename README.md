@@ -49,6 +49,10 @@ biosphir delete .biosphir
 biosphir delete .biosphir "D:\Projects\My Project"
 ```
 
+Run `biosphir show .biosphir` to search available drives for marker files and
+print their parent folders. This can take time. The scan skips inaccessible
+locations and avoids following directory links and Windows junctions.
+
 Discovery scans project folders directly under the workspace.
 An empty file uses the folder name as its display name and the lowercase folder
 name as its ID. For a stable ID and custom display name, use JSON:

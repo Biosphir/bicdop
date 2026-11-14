@@ -169,3 +169,14 @@ def test_delete(tmp_path, monkeypatch, explicit_folder):
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 1
     assert "Marker file not found" in result.stderr
+
+
+def test_show(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "scan_roots", lambda: [tmp_path])
+    marked = tmp_path / "outer" / "marked"
+    marked.mkdir(parents=True)
+    (marked / ".biosphir").touch()
+    (tmp_path / "unmarked" / ".biosphir").mkdir(parents=True)
+    result = runner.invoke(cli.app, ["show", ".biosphir"])
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == [str(marked)]

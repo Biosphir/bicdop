@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+from string import ascii_uppercase
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
@@ -218,6 +219,61 @@ def delete(
     except OSError as exc:
         fail(f"Could not delete marker {target}: {exc}")
     console.print(Text(f"Deleted {target}"))
+
+
+def scan_roots() -> list[Path]:
+    if os.name == "nt":
+        from ctypes import WinDLL
+
+        drives = WinDLL("kernel32").GetLogicalDrives()
+        if not drives:
+            fail("Could not enumerate Windows drives.")
+        return [
+            Path(f"{letter}:/")
+            for index, letter in enumerate(ascii_uppercase)
+            if drives & (1 << index)
+        ]
+    return [Path("/")]
+
+
+@app.command()
+def show(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+) -> None:
+    """List folders containing a .biosphir file across available drives."""
+    if marker != ".biosphir":
+        fail("Use .biosphir as the marker filename.")
+
+    skipped = 0
+    found = 0
+
+    def record_error(error: OSError) -> None:
+        nonlocal skipped
+        skipped += 1
+
+    for root in scan_roots():
+        for directory, folders, files in os.walk(root, onerror=record_error):
+            if os.name == "nt":
+                import stat
+
+                for name in folders[:]:
+                    try:
+                        attributes = (Path(directory) / name).lstat().st_file_attributes
+                    except OSError as error:
+                        record_error(error)
+                        folders.remove(name)
+                        continue
+                    if attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                        folders.remove(name)
+            if any(os.path.normcase(name) == marker for name in files):
+                if (Path(directory) / marker).is_file():
+                    typer.echo(directory)
+                    found += 1
+
+    if skipped:
+        error_console.print(Text(f"Skipped {skipped} inaccessible locations.", style="yellow"))
+    if not found:
+        typer.echo("No .biosphir files found.")
 
 
 @app.command()
