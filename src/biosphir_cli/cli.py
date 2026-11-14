@@ -345,8 +345,8 @@ def folder_size(folder: Path) -> str:
     return f"{filesize.decimal(total)}{' (partial)' if partial else ''}"
 
 
-@app.command("here", context_settings={"help_option_names": ["--help"]})
-def here() -> None:
+
+def show_current_folders() -> None:
     """List folders in the current terminal directory."""
     current = Path.cwd()
     try:
@@ -1121,12 +1121,15 @@ def find_marked_folders(roots: list[Path] | None) -> list[Path]:
 
 @app.command("--show", context_settings={"help_option_names": ["--help"]})
 def show(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    marker: Annotated[str | None, typer.Argument(help="Optional .biosphir marker search.")] = None,
     roots: Annotated[
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
 ) -> None:
-    """Print every folder containing a .biosphir file."""
+    """List current folders or search for .biosphir markers."""
+    if marker is None:
+        show_current_folders()
+        return
     if marker != ".biosphir":
         fail("Use .biosphir as the marker filename.")
     folders = find_marked_folders(roots)
