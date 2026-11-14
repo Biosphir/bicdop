@@ -102,3 +102,10 @@ To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) 
 To mark all unmarked folders directly under the workspace, run
 `biosphir projects plant .biosphir` and confirm the listed folders.
 Use `biosphir projects plant .biosphir --no-confirm` to skip the prompt.
+
+
+Use `biosphir projects collect` to preview and confirm moves into the workspace.
+Add `--no-confirm` to skip the prompt. Moves use the default discovery locations
+and keep nested projects inside their parent project. A destination conflict
+stops the operation before moving any folders. Moves require the source and
+workspace to be on the same volume.

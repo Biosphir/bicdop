@@ -287,6 +287,52 @@ def plant_workspace(
         raise typer.Exit(1)
 
 
+@projects_app.command("collect")
+def collect_workspace(
+    no_confirm: Annotated[
+        bool, typer.Option("--no-confirm", help="Move projects without prompting.")
+    ] = False,
+) -> None:
+    """Move marked projects into the workspace."""
+    workspace = workspace_path().resolve()
+    if not workspace.is_dir():
+        fail(f"Workspace folder does not exist: {workspace}")
+
+    outside = {
+        folder for folder in find_marked_folders(None)
+        if not folder.is_relative_to(workspace)
+    }
+    sources = [
+        folder for folder in sorted(outside)
+        if not any(parent in outside for parent in folder.parents)
+    ]
+    if not sources:
+        typer.echo("No marked projects outside the workspace.")
+        return
+
+    plan = [(source, workspace / source.name) for source in sources]
+    counts = Counter(os.path.normcase(target.name) for _, target in plan)
+    for source, target in plan:
+        if workspace.is_relative_to(source) or source == Path.home().resolve():
+            fail(f"Cannot collect an enclosing folder: {source}")
+        if os.path.lexists(target) or counts[os.path.normcase(target.name)] > 1:
+            fail(f"Destination conflict: {target}")
+        typer.echo(f"{source} -> {target}")
+
+    if not no_confirm and not typer.confirm("Move these folders into the workspace?"):
+        typer.echo("Cancelled.")
+        return
+
+    for source, target in plan:
+        if not (source / ".biosphir").is_file() or os.path.lexists(target):
+            fail(f"Source marker or destination changed: {source} -> {target}")
+        try:
+            source.rename(target)
+        except OSError as exc:
+            fail(f"Could not move {source} to {target}: {exc}")
+        typer.echo(f"Moved {target}")
+
+
 @app.command()
 def fix(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],

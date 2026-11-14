@@ -240,3 +240,22 @@ def test_projects_plant(workspace, options, answer, created):
     if created:
         assert json.loads(marker.read_text())["id"] == "new-project"
     assert (existing / ".biosphir").read_text() == '{"id":"keep"}'
+
+
+@pytest.mark.parametrize(("options", "answer", "moved"), [
+    ([], "n\n", False),
+    ([], "y\n", True),
+    (["--no-confirm"], "", True),
+])
+def test_collect_workspace(workspace, monkeypatch, options, answer, moved):
+    source = workspace.parent / f"{workspace.name}-external"
+    source.mkdir()
+    (source / ".biosphir").touch()
+    nested = source / "nested"
+    nested.mkdir()
+    (nested / ".biosphir").touch()
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [source, nested])
+    result = runner.invoke(cli.app, ["projects", "collect", *options], input=answer)
+    assert result.exit_code == 0
+    assert source.exists() != moved
+    assert (workspace / source.name / "nested" / ".biosphir").is_file() == moved
