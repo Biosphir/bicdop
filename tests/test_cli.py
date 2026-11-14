@@ -259,3 +259,22 @@ def test_collect_workspace(workspace, monkeypatch, options, answer, moved):
     assert result.exit_code == 0
     assert source.exists() != moved
     assert (workspace / source.name / "nested" / ".biosphir").is_file() == moved
+
+
+@pytest.mark.parametrize(("options", "answer", "deleted"), [
+    ([], "n\n", False),
+    ([], "y\n", True),
+    (["--no-confirm"], "", True),
+])
+def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
+    folders = [workspace / "first", workspace / "second"]
+    for folder in folders:
+        folder.mkdir()
+        (folder / ".biosphir").write_text(json.dumps({"id": folder.name}))
+        (folder / "content.txt").touch()
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: folders)
+    result = runner.invoke(
+        cli.app, ["projects", "delete", "first", "second", *options], input=answer
+    )
+    assert result.exit_code == 0, result.output
+    assert all(folder.exists() != deleted for folder in folders)

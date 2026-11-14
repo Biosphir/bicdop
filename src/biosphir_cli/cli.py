@@ -287,6 +287,59 @@ def plant_workspace(
         raise typer.Exit(1)
 
 
+@projects_app.command("delete")
+def delete_projects(
+    project_ids: Annotated[list[str], typer.Argument(help="Project IDs to delete.")],
+    no_confirm: Annotated[
+        bool, typer.Option("--no-confirm", help="Delete without prompting.")
+    ] = False,
+) -> None:
+    """Permanently delete selected project folders and their contents."""
+    matches: dict[str, list[Path]] = {
+        key: [] for key in dict.fromkeys(value.strip().lower() for value in project_ids)
+    }
+    for folder in find_marked_folders(None):
+        try:
+            key = marker_field(read_marker(folder / ".biosphir"), "id").lower()
+        except (OSError, ValueError):
+            continue
+        if key and key in matches:
+            matches[key].append(folder)
+
+    protected = [Path.home().resolve(), workspace_path().resolve(), Path.cwd().resolve()]
+    protected.extend(Path.home().joinpath(name).resolve() for name in ("Documents", "Downloads", "Desktop"))
+    targets = []
+    for key, folders in matches.items():
+        if not folders:
+            fail(f"Project ID not found: {key!r}")
+        if len(folders) > 1:
+            fail(f"Ambiguous project ID {key!r}: " + ", ".join(map(str, folders)))
+        folder = folders[0]
+        if any(path.is_relative_to(folder) for path in protected):
+            fail(f"Cannot delete a protected or enclosing folder: {folder}")
+        targets.append((key, folder))
+
+    if any(parent in folder.parents for _, folder in targets for _, parent in targets):
+        fail("Selected projects overlap. Select the parent project to delete its entire folder.")
+
+    for key, folder in targets:
+        typer.echo(f"{key}: {folder}")
+    if not no_confirm and not typer.confirm("Permanently delete these folders and their contents?"):
+        typer.echo("Cancelled.")
+        return
+
+    for key, folder in targets:
+        try:
+            if folder.resolve() != folder or marker_field(
+                read_marker(folder / ".biosphir"), "id"
+            ).lower() != key:
+                fail(f"Project changed since discovery: {folder}")
+            shutil.rmtree(folder)
+        except (OSError, ValueError) as exc:
+            fail(f"Could not delete {folder}: {exc}")
+        typer.echo(f"Deleted {folder}")
+
+
 @projects_app.command("collect")
 def collect_workspace(
     no_confirm: Annotated[

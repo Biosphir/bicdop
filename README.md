@@ -109,3 +109,9 @@ Add `--no-confirm` to skip the prompt. Moves use the default discovery locations
 and keep nested projects inside their parent project. A destination conflict
 stops the operation before moving any folders. Moves require the source and
 workspace to be on the same volume.
+
+
+Use `biosphir projects delete project-id another-id` to permanently delete
+the selected project folders and their contents. The command lists the paths
+and asks for confirmation. Add `--no-confirm` to skip the prompt.
+Missing or duplicate IDs stop the command before deletion begins.
