@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from importlib.metadata import version
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -74,7 +75,15 @@ def editor_path() -> str | None:
 
 
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    show_version: Annotated[
+        bool, typer.Option("--version", help="Show the BIOSPHIR CLI version.")
+    ] = False,
+) -> None:
+    if show_version:
+        typer.echo(f"BIOSPHIR CLI v{version('biosphir-cli')}")
+        raise typer.Exit()
     if ctx.invoked_subcommand is None:
         console.print(f"[bold blue]BIOSPHIR CLI v{version('biosphir-cli')}[/]")
         console.print("Internal Developer Toolkit")

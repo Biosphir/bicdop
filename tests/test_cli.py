@@ -27,6 +27,12 @@ def test_version(args):
     assert "BIOSPHIR CLI v0.1.0" in result.stdout
 
 
+def test_version_option():
+    result = runner.invoke(cli.app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "BIOSPHIR CLI v0.1.0"
+
+
 def test_projects(workspace):
     result = runner.invoke(cli.app, ["projects"])
     assert result.exit_code == 0

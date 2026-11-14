@@ -22,6 +22,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | `biosphir projects` | List project IDs and local folder status |
 | `biosphir open notcher` | Open the Notcher folder in VS Code |
 | `biosphir doctor` | Check Python, Git, VS Code, workspace, and registry |
+| `biosphir --version` | Show the installed CLI version |
 | `biosphir info` | Show version and configuration paths |
 
 ## Project registry
