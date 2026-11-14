@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import stat
 import sys
+import threading
 from collections import Counter
 from enum import Enum
 from importlib.metadata import version
@@ -19,6 +20,7 @@ from uuid import uuid4
 
 import typer
 from typer.core import TyperGroup
+from typer.core import _click
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -201,6 +203,49 @@ def main(
             console.print("Run biosphir --help for all commands.")
 
 
+shortcut_cancel = threading.Event()
+
+
+def watch_stop_shortcut(process: subprocess.Popen) -> None:
+    """Watch Alt+C while the Windows terminal that launched the process is active."""
+    if os.name != "nt" or not sys.stdin.isatty():
+        return
+
+    global shortcut_cancel
+    shortcut_cancel.set()
+    cancelled = shortcut_cancel = threading.Event()
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    terminal = user32.GetForegroundWindow()
+
+    def watch() -> None:
+        pressed = True
+        while not cancelled.is_set() and process.poll() is None:
+            active = terminal and user32.GetForegroundWindow() == terminal
+            down = bool(active and user32.GetAsyncKeyState(0x12) & 0x8000
+                        and user32.GetAsyncKeyState(0x43) & 0x8000)
+            if down and not pressed and not cancelled.is_set():
+                try:
+                    process.kill()
+                except OSError as exc:
+                    error_console.print(Text(f"Could not stop process: {exc}"))
+                else:
+                    typer.echo(f"Stopped PID {process.pid}.")
+                return
+            pressed = down
+            try:
+                process.wait(timeout=0.04)
+            except subprocess.TimeoutExpired:
+                continue
+
+    threading.Thread(target=watch, daemon=True).start()
+    typer.echo("Press Alt+C in this terminal to force-stop the program.")
+
+
 def interactive_shell() -> None:
     selected_project = None
     while True:
@@ -245,7 +290,12 @@ def interactive_shell() -> None:
                 args = ["--run", "--background", selected_project, *args[1:]]
         if args:
             try:
-                subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
+                if args[0] == "--run":
+                    app(args=[*args, "--interactive-session"], prog_name="biosphir", standalone_mode=False)
+                else:
+                    subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
+            except _click.ClickException as exc:
+                exc.show()
             except KeyboardInterrupt:
                 typer.echo()
 
@@ -519,7 +569,8 @@ def project_version(marker: Path) -> str:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{key} not found in {filename}")
         return value
-    pattern = rf"""^(?:\#define[ 	]+)?{re.escape(key)}[ 	]*(?:=[ 	]*|[ 	]+)["']([^"'
+    pattern = rf"""^(?:\#define[ 	]+)?{re.escape(key)}[ 	]*(?:=[ 	]*|[ 	]+)["']([^"'
+
 ]+)["'][ 	]*(?:[#;].*)?$"""
     match = re.search(pattern, content, re.MULTILINE)
     if not match:
@@ -577,6 +628,7 @@ def move_project(
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],
     script: Annotated[Path | None, typer.Argument(help="Python script relative to the project folder.")] = None,
+    interactive: Annotated[bool, typer.Option("--interactive-session", hidden=True)] = False,
     background: Annotated[
         bool, typer.Option("--background/--wait", help="Run separately or wait for the script to finish.")
     ] = False,
@@ -612,11 +664,20 @@ def run_project(
                 start_new_session=os.name != "nt",
             )
             typer.echo(f"Started {target.name} (PID {process.pid}). Use --wait to see script output.")
+            if interactive:
+                watch_stop_shortcut(process)
             return
-        result = subprocess.run(command, cwd=folder, check=False)
+        process = subprocess.Popen(command, cwd=folder)
+        watch_stop_shortcut(process)
+        try:
+            return_code = process.wait()
+        except KeyboardInterrupt:
+            process.kill()
+            process.wait()
+            raise
     except OSError as exc:
         fail(f"Could not run {target}: {exc}")
-    raise typer.Exit(result.returncode)
+    raise typer.Exit(return_code)
 
 
 class RenameField(str, Enum):
