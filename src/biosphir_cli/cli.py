@@ -315,10 +315,14 @@ def show(
     if marker != ".biosphir":
         fail("Use .biosphir as the marker filename.")
     folders = find_marked_folders(roots)
-    for folder in folders:
-        typer.echo(str(folder))
     if not folders:
         typer.echo("No .biosphir projects found.")
+        return
+    table = Table("Folder")
+    table.add_column("Path", overflow="fold")
+    for folder in folders:
+        table.add_row(Text(folder.name or folder.anchor), Text(str(folder)))
+    console.print(table)
 
 
 @app.command()
