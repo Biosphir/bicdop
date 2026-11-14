@@ -339,21 +339,21 @@ def marker_field(metadata: dict, field: str) -> str:
 
 @app.command("--open", context_settings={"help_option_names": ["--help"]})
 def open_project(project: str) -> None:
-    """Open a project folder in VS Code."""
+    """Open a project folder in the file manager."""
     entry = discover_projects().get(project.lower())
     if entry is None:
         fail(f"Unknown project {project!r}. Run biosphir projects for IDs.")
     path = project_path(entry).absolute()
     if not path.is_dir():
         fail(f"Project folder missing: {path}")
-    editor = editor_path()
-    if editor is None:
-        fail("VS Code was not found. Install it or add its executable to PATH.")
+    file_manager = {"Windows": "explorer.exe", "Darwin": "open"}.get(
+        platform.system(), "xdg-open"
+    )
     try:
-        subprocess.Popen([editor, str(path)])
+        subprocess.Popen([file_manager, str(path)])
     except OSError as exc:
-        fail(f"Could not launch VS Code: {exc}")
-    console.print(Text(f"Requested VS Code to open {entry['name']}."))
+        fail(f"Could not open folder {path}: {exc}")
+    console.print(Text(f"Opening {path}"))
 
 
 def marker_path(marker: str, folder: Path) -> Path:

@@ -52,11 +52,11 @@ def test_open(workspace, monkeypatch):
     folder = workspace / "Notcher folder"
     folder.mkdir()
     launched = []
-    monkeypatch.setattr(cli, "editor_path", lambda: "Code.exe")
+    monkeypatch.setattr(cli.platform, "system", lambda: "Windows")
     monkeypatch.setattr(cli.subprocess, "Popen", launched.append)
     result = runner.invoke(cli.app, ["--open", "Notcher"])
     assert result.exit_code == 0
-    assert launched == [["Code.exe", str(folder)]]
+    assert launched == [["explorer.exe", str(folder)]]
 
 
 @pytest.mark.parametrize(
@@ -95,12 +95,12 @@ def test_discovery(workspace, monkeypatch):
 
     marker.write_text('{"id": "new", "name": "New Display Name"}', encoding="utf-8")
     launched = []
-    monkeypatch.setattr(cli, "editor_path", lambda: "Code.exe")
+    monkeypatch.setattr(cli.platform, "system", lambda: "Windows")
     monkeypatch.setattr(cli.subprocess, "Popen", launched.append)
     result = runner.invoke(cli.app, ["--open", "new"])
     assert result.exit_code == 0
-    assert "New Display Name" in result.stdout
-    assert launched == [["Code.exe", str(folder)]]
+    assert "Opening" in result.stdout
+    assert launched == [["explorer.exe", str(folder)]]
 
 
 def test_registered_folder_with_marker_is_listed_once(workspace):

@@ -28,7 +28,7 @@ and wait for it to finish.
 
 ## Install in PowerShell
 
-Install Python 3.10 or newer and Git. Install VS Code to use `open`.
+Install Python 3.10 or newer and Git.
 
 ```powershell
 git clone https://github.com/Biosphir/biosphir-cli.git
@@ -44,7 +44,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | --- | --- |
 | `biosphir` | Start interactive mode in a terminal |
 | `biosphir projects` | List folders with a .biosphir marker |
-| `biosphir --open notcher` | Open the Notcher folder in VS Code |
+| `biosphir --open notcher` | Open the Notcher folder in File Explorer |
 | `biosphir --doctor` | Check Python, Git, VS Code, workspace, and registry |
 | `biosphir --version` | Show the installed CLI version |
 | `biosphir --help` | Show all commands and project subcommands |
