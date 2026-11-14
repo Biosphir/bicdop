@@ -16,12 +16,22 @@ from typing import Annotated
 from uuid import uuid4
 
 import typer
+from typer.core import TyperGroup
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 from rich.text import Text
 
-app = typer.Typer(help="BIOSPHIR internal developer toolkit.")
+class ActionGroup(TyperGroup):
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
+        # A registered action starts with "--", so end group option parsing
+        # before Typer resolves it as a command with its own arguments.
+        if args and args[0] in self.commands and args[0].startswith("--"):
+            args = ["--", *args]
+        return super().parse_args(ctx, args)
+
+
+app = typer.Typer(cls=ActionGroup, context_settings={"help_option_names": []}, help="BIOSPHIR internal developer toolkit.")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -183,10 +193,10 @@ def main(
         console.print(f"[bold blue]BIOSPHIR CLI v{version('biosphir-cli')}[/]")
         console.print("Internal Developer Toolkit")
         if sys.stdin.isatty():
-            console.print("Type help for commands or exit to leave.")
+            console.print("Type --help for commands or --exit to leave.")
             interactive_shell()
         else:
-            console.print("Run biosphir help for all commands.")
+            console.print("Run biosphir --help for all commands.")
 
 
 def interactive_shell() -> None:
@@ -201,7 +211,7 @@ def interactive_shell() -> None:
         except KeyboardInterrupt:
             typer.echo()
             continue
-        if line.lower() in {"exit", "quit"}:
+        if line.lower() in {"--exit", "--quit"}:
             return
         lexer = shlex.shlex(line, posix=True)
         lexer.whitespace_split = True
@@ -213,7 +223,7 @@ def interactive_shell() -> None:
         except ValueError as exc:
             error_console.print(Text(f"Invalid command: {exc}", style="red"))
             continue
-        if args[:2] == ["projects", "select"] and len(args) == 3 and args[2] != "--help":
+        if args[:2] == ["projects", "--select"] and len(args) == 3 and args[2] != "--help":
             try:
                 marker = find_project_marker(args[2])
             except typer.Exit:
@@ -222,13 +232,13 @@ def interactive_shell() -> None:
             typer.echo(f"Selected {selected_project}: {marker.parent}")
             continue
         if args == ["--update"]:
-            typer.echo("Type exit, then run biosphir --update from your terminal.")
+            typer.echo("Type --exit, then run biosphir --update from your terminal.")
             continue
-        if args and args[0] == "run":
+        if args and args[0] == "--run":
             if selected_project is None:
-                error_console.print("Select a project first with projects select PROJECT_ID.")
+                error_console.print("Select a project first with projects --select PROJECT_ID.")
                 continue
-            args = ["projects", "run", "--background", selected_project, *args[1:]]
+            args = ["projects", "--run", "--background", selected_project, *args[1:]]
         if args:
             try:
                 subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
@@ -236,7 +246,7 @@ def interactive_shell() -> None:
                 typer.echo()
 
 
-@app.command()
+@app.command("--help", context_settings={"help_option_names": ["--help"]})
 def help(ctx: typer.Context) -> None:
     """Show all commands, including project subcommands."""
     root = ctx.find_root()
@@ -247,8 +257,8 @@ def help(ctx: typer.Context) -> None:
         typer.echo(projects_context.get_help())
 
 
-projects_app = typer.Typer(help="List and mark BIOSPHIR projects.")
-app.add_typer(projects_app, name="projects")
+projects_app = typer.Typer(cls=ActionGroup, help="List and manage BIOSPHIR projects.")
+app.add_typer(projects_app, name="projects", context_settings={"help_option_names": ["--help"]})
 
 
 def unmarked_workspace_folders() -> list[Path]:
@@ -326,7 +336,7 @@ def marker_field(metadata: dict, field: str) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-@app.command("open")
+@app.command("--open", context_settings={"help_option_names": ["--help"]})
 def open_project(project: str) -> None:
     """Open a project folder in VS Code."""
     entry = discover_projects().get(project.lower())
@@ -361,7 +371,7 @@ def marker_defaults(folder: Path) -> dict[str, str]:
     return {"id": project_id or f"project-{uuid4().hex}", "name": name}
 
 
-@app.command()
+@app.command("--plant", context_settings={"help_option_names": ["--help"]})
 def plant(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
@@ -382,7 +392,7 @@ def plant(
         console.print(Text(f"Created {target}"))
 
 
-@projects_app.command("plant")
+@projects_app.command("--plant")
 def plant_workspace(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     no_confirm: Annotated[
@@ -433,15 +443,15 @@ def find_project_marker(project_id: str) -> Path:
     return matches[0]
 
 
-@projects_app.command("select")
+@projects_app.command("--select")
 def select_project(
     project_id: Annotated[str, typer.Argument(help="Project ID to select in interactive mode.")],
 ) -> None:
     """Select a project at the biosphir prompt."""
-    fail("Start interactive mode with biosphir, then run projects select PROJECT_ID.")
+    fail("Start interactive mode with biosphir, then run projects --select PROJECT_ID.")
 
 
-@projects_app.command("run")
+@projects_app.command("--run")
 def run_project(
     project_id: Annotated[str, typer.Argument(help="Project ID.")],
     script: Annotated[Path, typer.Argument(help="Python script relative to the project folder.")],
@@ -478,7 +488,7 @@ def run_project(
     raise typer.Exit(result.returncode)
 
 
-@projects_app.command("rename")
+@projects_app.command("--rename")
 def rename_project(
     project_id: Annotated[str, typer.Argument(help="Project ID to rename.")],
 ) -> None:
@@ -501,7 +511,7 @@ def rename_project(
     typer.echo(f"Renamed {project_id} to {name}")
 
 
-@projects_app.command("delete")
+@projects_app.command("--delete")
 def delete_projects(
     project_ids: Annotated[list[str], typer.Argument(help="Project IDs to delete.")],
     no_confirm: Annotated[
@@ -554,7 +564,7 @@ def delete_projects(
         typer.echo(f"Deleted {folder}")
 
 
-@projects_app.command("clone")
+@projects_app.command("--clone")
 def clone_project(
     project: Annotated[str, typer.Argument(help="Project ID or BIOSPHIR_WORKSPACE.")],
     destination: Annotated[
@@ -611,7 +621,7 @@ def clone_project(
     typer.echo(f"Cloned {source} to {target}")
 
 
-@projects_app.command("collect")
+@projects_app.command("--collect")
 def collect_workspace(
     no_confirm: Annotated[
         bool, typer.Option("--no-confirm", help="Move projects without prompting.")
@@ -657,7 +667,7 @@ def collect_workspace(
         typer.echo(f"Moved {target}")
 
 
-@app.command()
+@app.command("--fix", context_settings={"help_option_names": ["--help"]})
 def fix(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
@@ -665,7 +675,7 @@ def fix(
     """Repair an existing .biosphir marker."""
     target = marker_path(marker, folder)
     if not target.is_file():
-        fail(f"Marker file not found: {target}. Use biosphir plant .biosphir to create it.")
+        fail(f"Marker file not found: {target}. Use biosphir --plant .biosphir to create it.")
     if target.is_symlink():
         fail(f"Cannot repair a symbolic link: {target}")
 
@@ -692,7 +702,7 @@ def fix(
     console.print(Text(f"Repaired {target}"))
 
 
-@app.command()
+@app.command("--check", context_settings={"help_option_names": ["--help"]})
 def check(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
@@ -704,7 +714,7 @@ def check(
     console.print(Text(f"Found {target}"))
 
 
-@app.command()
+@app.command("--delete", context_settings={"help_option_names": ["--help"]})
 def delete(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
@@ -748,7 +758,7 @@ def find_marked_folders(roots: list[Path] | None) -> list[Path]:
     return sorted(matches)
 
 
-@app.command()
+@app.command("--show", context_settings={"help_option_names": ["--help"]})
 def show(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     roots: Annotated[
@@ -769,7 +779,7 @@ def show(
     console.print(table)
 
 
-@app.command()
+@app.command("--discover", context_settings={"help_option_names": ["--help"]})
 def discover(
     roots: Annotated[
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
@@ -801,7 +811,7 @@ def discover(
     console.print(table)
 
 
-@app.command()
+@app.command("--doctor", context_settings={"help_option_names": ["--help"]})
 def doctor() -> None:
     """Check Python, Git, VS Code, workspace, and the registry."""
     entries = load_projects()
@@ -819,7 +829,7 @@ def doctor() -> None:
         raise typer.Exit(1)
 
 
-@app.command()
+@app.command("--info", context_settings={"help_option_names": ["--help"]})
 def info() -> None:
     """Show the CLI version and configuration paths."""
     console.print(Text(f"BIOSPHIR CLI v{version('biosphir-cli')}"))
