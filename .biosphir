@@ -2,5 +2,9 @@
   "id": "biosphir-cli",
   "name": "BIOSPHIR CLI",
   "schema_version": 1,
-  "entrypoint": null
+  "entrypoint": null,
+  "version_source": {
+    "file": "pyproject.toml",
+    "key": "project.version"
+  }
 }

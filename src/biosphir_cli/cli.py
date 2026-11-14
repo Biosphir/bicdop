@@ -495,12 +495,49 @@ def setup_project(project_id: str) -> None:
     typer.echo(f"Python environment ready: {environment}")
 
 
+def project_version(marker: Path) -> str:
+    source = read_marker(marker).get("version_source")
+    if source is None:
+        return "Not configured"
+    if not isinstance(source, dict):
+        raise ValueError("version_source must be an object")
+    filename = marker_field(source, "file")
+    key = marker_field(source, "key")
+    folder = marker.parent.resolve()
+    relative = Path(filename)
+    path = (folder / relative).resolve()
+    if not filename or not key or relative.is_absolute() or not path.is_relative_to(folder):
+        raise ValueError("version_source needs a key and a relative file inside the project")
+
+    content = path.read_text(encoding="utf-8-sig")
+    if path.suffix.lower() == ".toml":
+        import tomli as tomllib
+
+        value = tomllib.loads(content)
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} not found in {filename}")
+        return value
+    pattern = rf"""^(?:\#define[ 	]+)?{re.escape(key)}[ 	]*(?:=[ 	]*|[ 	]+)["']([^"'
+]+)["'][ 	]*(?:[#;].*)?$"""
+    match = re.search(pattern, content, re.MULTILINE)
+    if not match:
+        raise ValueError(f"{key} not found in {filename}")
+    return match.group(1)
+
+
 @app.command("--status", context_settings={"help_option_names": ["--help"]})
 def project_status(project_id: str) -> None:
     """Show a project's location, Python files, and local Git status."""
-    folder = find_project_marker(project_id).parent
+    marker = find_project_marker(project_id)
+    folder = marker.parent
     python = folder / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     typer.echo(f"Path: {folder}")
+    try:
+        typer.echo(f"Version: {project_version(marker)}")
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Version: unavailable ({exc})")
     typer.echo(f"Python environment: {python if python.is_file() else 'Missing .venv'}")
     for filename in ("main.py", "requirements.txt"):
         typer.echo(f"{filename}: {'Found' if (folder / filename).is_file() else 'Missing'}")
