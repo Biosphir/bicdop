@@ -163,6 +163,32 @@ def open_project(project: str) -> None:
 
 
 @app.command()
+def plant(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
+) -> None:
+    """Create a .biosphir marker in an existing folder."""
+    if marker != ".biosphir":
+        fail("Use .biosphir as the marker filename.")
+    folder = folder.expanduser().absolute()
+    if not folder.is_dir():
+        fail(f"Target folder does not exist or is not a directory: {folder}")
+
+    target = folder / marker
+    try:
+        with target.open("x", encoding="utf-8"):
+            pass
+    except FileExistsError:
+        if not target.is_file():
+            fail(f"Marker path is not a file: {target}")
+        console.print(Text(f"Already exists: {target}"))
+    except OSError as exc:
+        fail(f"Could not create marker {target}: {exc}")
+    else:
+        console.print(Text(f"Created {target}"))
+
+
+@app.command()
 def doctor() -> None:
     """Check Python, Git, VS Code, workspace, and the registry."""
     entries = load_projects()

@@ -105,3 +105,29 @@ def test_registered_folder_with_marker_is_listed_once(workspace):
     assert result.exit_code == 0
     assert result.stdout.count("Notcher folder") == 1
     assert "Available" in result.stdout
+
+
+@pytest.mark.parametrize("explicit_folder", [False, True])
+def test_plant(tmp_path, monkeypatch, explicit_folder):
+    folder = tmp_path / "Project folder"
+    folder.mkdir()
+    args = ["plant", ".biosphir"]
+    if explicit_folder:
+        args.append(str(folder))
+    else:
+        monkeypatch.chdir(folder)
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0
+    marker = folder / ".biosphir"
+    assert marker.read_text() == ""
+
+    marker.write_text('{"name": "My Project"}', encoding="utf-8")
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0
+    assert marker.read_text(encoding="utf-8") == '{"name": "My Project"}'
+
+
+def test_plant_rejects_missing_folder(tmp_path):
+    result = runner.invoke(cli.app, ["plant", ".biosphir", str(tmp_path / "missing")])
+    assert result.exit_code == 1
+    assert "Target folder does not exist" in result.stderr

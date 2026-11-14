@@ -27,7 +27,15 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 
 ## Automatic project discovery
 
-Put a `.biosphir` file in a project folder directly under the workspace.
+Use `plant` to create an empty marker in the current folder or in an existing
+folder specified by path. An existing marker keeps its contents.
+
+```powershell
+biosphir plant .biosphir
+biosphir plant .biosphir "D:\Projects\My Project"
+```
+
+Discovery scans project folders directly under the workspace.
 An empty file uses the folder name as its display name and the lowercase folder
 name as its ID. For a stable ID and custom display name, use JSON:
 
