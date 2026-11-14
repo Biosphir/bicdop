@@ -279,6 +279,13 @@ def interactive_shell() -> None:
             selected_project = args[1].strip().lower()
             typer.echo(f"Selected {selected_project}: {marker.parent}")
             continue
+        if len(args) == 2 and args[0] == "--cd" and args[1] != "--help":
+            try:
+                os.chdir(Path(args[1]).expanduser())
+                typer.echo(str(Path.cwd()))
+            except (OSError, RuntimeError) as exc:
+                error_console.print(Text(f"Could not change directory: {exc}", style="red"))
+            continue
         if args == ["--update"]:
             typer.echo("Type --exit, then run biosphir --update from your terminal.")
             continue
@@ -344,6 +351,12 @@ def folder_size(folder: Path) -> str:
                 total += info.st_size
     return f"{filesize.decimal(total)}{' (partial)' if partial else ''}"
 
+
+
+@app.command("--cd", context_settings={"help_option_names": ["--help"]})
+def change_directory(folder: Annotated[Path, typer.Argument(help="Target folder.")]) -> None:
+    """Change the working directory at the interactive BIOSPHIR prompt."""
+    fail("Use --cd inside interactive BIOSPHIR, or cd directly in your terminal.")
 
 
 @app.command("--mkdir", context_settings={"help_option_names": ["--help"]})
