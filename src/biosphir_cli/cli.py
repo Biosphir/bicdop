@@ -21,6 +21,7 @@ from uuid import uuid4
 import typer
 from typer.core import TyperGroup
 from typer.core import _click
+from rich import filesize
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -316,6 +317,34 @@ def unmarked_workspace_folders() -> list[Path]:
     ]
 
 
+def folder_size(folder: Path) -> str:
+    total = 0
+    partial = False
+
+    def mark_partial(error: OSError) -> None:
+        nonlocal partial
+        partial = True
+
+    for directory, folders, files in os.walk(folder, onerror=mark_partial):
+        for name in folders[:] + files:
+            path = Path(directory) / name
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                mark_partial(exc)
+                if name in folders:
+                    folders.remove(name)
+                continue
+            if stat.S_ISLNK(info.st_mode) or (
+                getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                if name in folders:
+                    folders.remove(name)
+            elif stat.S_ISREG(info.st_mode):
+                total += info.st_size
+    return f"{filesize.decimal(total)}{' (partial)' if partial else ''}"
+
+
 @app.command("--projects", context_settings={"help_option_names": ["--help"]})
 def projects(
     roots: Annotated[
@@ -333,6 +362,7 @@ def projects(
         return
 
     table = Table("Project ID", "Name", "Local repo", "Local status")
+    table.add_column("Size", justify="right")
     table.add_column("Path", overflow="fold")
     workspace = workspace_path().resolve()
     for folder in folders:
@@ -346,7 +376,7 @@ def projects(
         path_style = "" if folder.is_relative_to(workspace) else "yellow"
         table.add_row(
             Text(project_id.lower() or "-"), Text(name), Text(folder.name),
-            status, Text(str(folder), style=path_style),
+            status, folder_size(folder), Text(str(folder), style=path_style),
         )
     console.print(table)
 
