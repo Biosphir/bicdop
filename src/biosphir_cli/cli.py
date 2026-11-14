@@ -346,6 +346,19 @@ def folder_size(folder: Path) -> str:
 
 
 
+@app.command("--mkdir", context_settings={"help_option_names": ["--help"]})
+def mkdir(name: Annotated[str, typer.Argument(help="Name of the new folder.")]) -> None:
+    """Create a folder in the current directory."""
+    if not name.strip() or name in {".", ".."} or Path(name).name != name:
+        fail("Provide a folder name without a path.")
+    folder = Path.cwd() / name
+    try:
+        folder.mkdir()
+    except OSError as exc:
+        fail(f"Could not create {folder}: {exc}")
+    typer.echo(f"Created {folder}")
+
+
 def show_current_folders() -> None:
     """List folders in the current terminal directory."""
     current = Path.cwd()
