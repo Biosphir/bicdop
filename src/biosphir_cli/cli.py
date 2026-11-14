@@ -348,11 +348,7 @@ def plant_workspace(
         raise typer.Exit(1)
 
 
-@projects_app.command("rename")
-def rename_project(
-    project_id: Annotated[str, typer.Argument(help="Project ID to rename.")],
-) -> None:
-    """Change a project's display name."""
+def find_project_marker(project_id: str) -> Path:
     key = project_id.strip().lower()
     matches = []
     for folder in find_marked_folders(None):
@@ -369,7 +365,37 @@ def rename_project(
     if len(matches) > 1:
         fail(f"Ambiguous project ID {project_id!r}: " + ", ".join(map(str, matches)))
 
-    marker = matches[0]
+    return matches[0]
+
+
+@projects_app.command("run")
+def run_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID.")],
+    script: Annotated[Path, typer.Argument(help="Python script relative to the project folder.")],
+) -> None:
+    """Run a Python script from a project folder."""
+    folder = find_project_marker(project_id).parent
+    target = (folder / script).resolve()
+    if not target.is_relative_to(folder) or target.suffix.lower() != ".py" or not target.is_file():
+        fail(f"Expected an existing .py file inside the project: {target}")
+
+    executable = folder / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not executable.is_file():
+        executable = Path(getattr(sys, "_base_executable", None) or sys.executable)
+    try:
+        result = subprocess.run([str(executable), str(target)], cwd=folder, check=False)
+    except OSError as exc:
+        fail(f"Could not run {target}: {exc}")
+    raise typer.Exit(result.returncode)
+
+
+@projects_app.command("rename")
+def rename_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID to rename.")],
+) -> None:
+    """Change a project's display name."""
+    marker = find_project_marker(project_id)
+    key = project_id.strip().lower()
     typer.echo(str(marker.parent))
     name = typer.prompt("New project name").strip()
     if not name:

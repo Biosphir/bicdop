@@ -126,3 +126,7 @@ Missing or duplicate IDs stop the command before deletion begins.
 
 Run `biosphir projects rename project-id` and enter a new display name.
 The name is saved in `.biosphir`. The project ID and folder path stay the same.
+
+Run `biosphir projects run project-id main.py` to execute a Python script from
+the project folder. It uses the project's `.venv` when available and otherwise
+uses the base Python installation behind the CLI.
