@@ -181,3 +181,14 @@ def test_show(workspace):
     result = runner.invoke(cli.app, ["show", ".biosphir"])
     assert result.exit_code == 0
     assert result.stdout.splitlines() == [str(marked)]
+
+
+def test_discover_reports_duplicates_and_review(tmp_path):
+    for name, content in (("first", '{"id":"demo"}'), ("second", '{"id":"DEMO"}'), ("empty", "")):
+        folder = tmp_path / "group" / name
+        folder.mkdir(parents=True)
+        (folder / ".biosphir").write_text(content, encoding="utf-8")
+    result = runner.invoke(cli.app, ["discover", "--root", str(tmp_path)], terminal_width=160)
+    assert result.exit_code == 0
+    assert result.stdout.count("Duplicate ID") == 2
+    assert "Review: missing ID" in result.stdout

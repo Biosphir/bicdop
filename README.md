@@ -65,6 +65,18 @@ it appears once and retains the registry ID and name unless the marker overrides
 them. IDs must be unique across folders. Commit the marker to share it with
 everyone who clones the project.
 
+## Discover projects across folders
+
+Run `biosphir discover` to scan the workspace, Documents, Downloads, and Desktop
+recursively. To search specific locations, repeat `--root`:
+
+```powershell
+biosphir discover --root "D:\Projects" --root "$env:USERPROFILE\Downloads"
+```
+
+The report flags duplicate IDs and markers that need review. Discovery leaves
+all folders in place.
+
 ## Project registry
 
 The bundled registry includes Notcher, Macro Pad Z1, Gwen, and the BIOSPHIR Website. Relative project paths resolve under `~/Documents/GitHub` by default. Set `$env:BIOSPHIR_WORKSPACE = 'D:\Projects'` to use another workspace in the current shell.

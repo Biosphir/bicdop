@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+from collections import Counter
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
@@ -237,6 +238,60 @@ def show(
             found = True
     if not found:
         typer.echo(f"No .biosphir projects found in {workspace}.")
+
+
+@app.command()
+def discover(
+    roots: Annotated[
+        list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
+    ] = None,
+) -> None:
+    """Find marked projects recursively and flag duplicate IDs."""
+    defaults = [workspace_path(), *(Path.home() / name for name in ("Documents", "Downloads", "Desktop"))]
+    search_roots = roots or [root for root in defaults if root.is_dir()]
+    matches: dict[Path, tuple[str, str]] = {}
+
+    def report_error(error: OSError) -> None:
+        error_console.print(Text(f"Skipped: {error}", style="yellow"))
+
+    for root in search_roots:
+        root = root.expanduser()
+        if not root.is_dir():
+            fail(f"Search folder does not exist: {root}")
+        for directory, folders, files in os.walk(root.resolve(), onerror=report_error):
+            folder = Path(directory)
+            folders[:] = [
+                name for name in folders
+                if name not in {".git", ".venv", "node_modules", "__pycache__"}
+                and not (folder / name).is_symlink()
+                and (folder / name).resolve().parent == folder
+            ]
+            if not any(os.path.normcase(name) == ".biosphir" for name in files):
+                continue
+            marker = folder / ".biosphir"
+            if folder in matches or not marker.is_file():
+                continue
+            try:
+                content = marker.read_text(encoding="utf-8-sig").strip()
+                metadata = json.loads(content) if content else {}
+                project_id = metadata.get("id") if isinstance(metadata, dict) else None
+                if not isinstance(project_id, str) or not project_id.strip():
+                    matches[folder] = ("", "Review: missing ID")
+                    continue
+                matches[folder] = (project_id.strip().lower(), "Detected")
+            except (OSError, ValueError):
+                matches[folder] = ("", "Review: unreadable or invalid JSON")
+
+    if not matches:
+        typer.echo("No .biosphir projects found.")
+        return
+    counts = Counter(project_id for project_id, _ in matches.values() if project_id)
+    table = Table("Project ID", "Folder", "Status")
+    for folder, (project_id, status) in sorted(matches.items()):
+        if counts[project_id] > 1:
+            status = "Duplicate ID"
+        table.add_row(Text(project_id or "-"), Text(str(folder)), status)
+    console.print(table)
 
 
 @app.command()
