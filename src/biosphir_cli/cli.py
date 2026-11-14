@@ -133,6 +133,8 @@ def main(
         typer.echo(f"BIOSPHIR CLI v{version('biosphir-cli')}")
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            os.system("cls" if os.name == "nt" else "clear")
         console.print(f"[bold blue]BIOSPHIR CLI v{version('biosphir-cli')}[/]")
         console.print("Internal Developer Toolkit")
         if sys.stdin.isatty():
