@@ -136,20 +136,33 @@ def main(
         console.print("Run biosphir --help for commands.")
 
 
-@app.command()
+projects_app = typer.Typer(help="List and mark BIOSPHIR projects.")
+app.add_typer(projects_app, name="projects")
+
+
+def unmarked_workspace_folders() -> list[Path]:
+    workspace = workspace_path()
+    if not workspace.is_dir():
+        return []
+    return [
+        folder for folder in sorted(workspace.iterdir())
+        if folder.is_dir() and not (folder / ".biosphir").is_file()
+    ]
+
+
+@projects_app.callback(invoke_without_command=True)
 def projects(
+    ctx: typer.Context,
     roots: Annotated[
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
 ) -> None:
-    """List folders containing a .biosphir marker."""
-    workspace = workspace_path()
-    if workspace.is_dir():
-        for folder in sorted(workspace.iterdir()):
-            if folder.is_dir() and not (folder / ".biosphir").is_file():
-                error_console.print(
-                    Text(f"Warning: Workspace folder has no .biosphir file: {folder}", style="yellow")
-                )
+    if ctx.invoked_subcommand is not None:
+        return
+    for folder in unmarked_workspace_folders():
+        error_console.print(
+            Text(f"Warning: Workspace folder has no .biosphir file: {folder}", style="yellow")
+        )
     folders = find_marked_folders(roots)
     if not folders:
         typer.echo("No .biosphir projects found.")
@@ -236,6 +249,37 @@ def plant(
         fail(f"Could not create marker {target}: {exc}")
     else:
         console.print(Text(f"Created {target}"))
+
+
+@projects_app.command("plant")
+def plant_workspace(
+    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    no_confirm: Annotated[
+        bool, typer.Option("--no-confirm", help="Create markers without prompting.")
+    ] = False,
+) -> None:
+    """Create markers in unmarked folders directly under the workspace."""
+    workspace = workspace_path()
+    marker_path(marker, workspace)
+    folders = unmarked_workspace_folders()
+    if not folders:
+        typer.echo("All workspace folders already have .biosphir.")
+        return
+
+    for folder in folders:
+        typer.echo(str(folder))
+    if not no_confirm and not typer.confirm("Create .biosphir in these folders?"):
+        typer.echo("Cancelled.")
+        return
+
+    failed = False
+    for folder in folders:
+        try:
+            plant(marker, folder)
+        except typer.Exit:
+            failed = True
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()

@@ -97,3 +97,8 @@ To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) 
 .\.venv\Scripts\python.exe -m pip install -e '.[test]'
 .\.venv\Scripts\python.exe -m pytest
 ```
+
+
+To mark all unmarked folders directly under the workspace, run
+`biosphir projects plant .biosphir` and confirm the listed folders.
+Use `biosphir projects plant .biosphir --no-confirm` to skip the prompt.

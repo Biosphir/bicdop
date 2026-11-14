@@ -218,3 +218,25 @@ def test_fix(tmp_path, content):
         assert data["extra"] is True
     else:
         assert data["id"] == "project-folder"
+
+
+@pytest.mark.parametrize(("options", "answer", "created"), [
+    ([], "n\n", False),
+    ([], "y\n", True),
+    (["--no-confirm"], "", True),
+])
+def test_projects_plant(workspace, options, answer, created):
+    folder = workspace / "New Project"
+    folder.mkdir()
+    existing = workspace / "Existing"
+    existing.mkdir()
+    (existing / ".biosphir").write_text('{"id":"keep"}')
+    result = runner.invoke(
+        cli.app, ["projects", "plant", ".biosphir", *options], input=answer
+    )
+    assert result.exit_code == 0
+    marker = folder / ".biosphir"
+    assert marker.exists() == created
+    if created:
+        assert json.loads(marker.read_text())["id"] == "new-project"
+    assert (existing / ".biosphir").read_text() == '{"id":"keep"}'
