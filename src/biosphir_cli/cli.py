@@ -137,14 +137,42 @@ def main(
 
 
 @app.command()
-def projects() -> None:
-    """List registered and discovered projects."""
+def projects(
+    roots: Annotated[
+        list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
+    ] = None,
+) -> None:
+    """List folders containing a .biosphir marker."""
+    folders = find_marked_folders(roots)
+    if not folders:
+        typer.echo("No .biosphir projects found.")
+        return
+
     table = Table("Project ID", "Name", "Local repo", "Local status")
-    for key, entry in discover_projects().items():
-        folder = project_path(entry)
-        status = "Available" if folder.is_dir() else "Missing"
-        table.add_row(Text(key), Text(entry["name"]), Text(folder.name), status)
+    table.add_column("Path", overflow="fold")
+    for folder in folders:
+        try:
+            metadata = read_marker(folder / ".biosphir")
+        except (OSError, ValueError):
+            metadata = {}
+        project_id = marker_field(metadata, "id")
+        name = marker_field(metadata, "name") or folder.name
+        status = "Available" if project_id else "Review"
+        table.add_row(Text(project_id.lower() or "-"), Text(name), Text(folder.name), status, Text(str(folder)))
     console.print(table)
+
+
+def read_marker(marker: Path) -> dict:
+    content = marker.read_text(encoding="utf-8-sig").strip()
+    metadata = json.loads(content) if content else {}
+    if not isinstance(metadata, dict):
+        raise ValueError("Expected a JSON object")
+    return metadata
+
+
+def marker_field(metadata: dict, field: str) -> str:
+    value = metadata.get(field)
+    return value.strip() if isinstance(value, str) else ""
 
 
 @app.command("open")
@@ -336,10 +364,8 @@ def discover(
     for folder in find_marked_folders(roots):
         marker = folder / ".biosphir"
         try:
-            content = marker.read_text(encoding="utf-8-sig").strip()
-            metadata = json.loads(content) if content else {}
-            project_id = metadata.get("id") if isinstance(metadata, dict) else None
-            if not isinstance(project_id, str) or not project_id.strip():
+            project_id = marker_field(read_marker(marker), "id")
+            if not project_id:
                 matches[folder] = ("", "Review: missing ID")
                 continue
             matches[folder] = (project_id.strip().lower(), "Detected")

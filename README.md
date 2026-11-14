@@ -19,7 +19,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | Command | What it does |
 | --- | --- |
 | `biosphir` | Show the CLI dashboard |
-| `biosphir projects` | List project IDs and local folder status |
+| `biosphir projects` | List folders with a .biosphir marker |
 | `biosphir open notcher` | Open the Notcher folder in VS Code |
 | `biosphir doctor` | Check Python, Git, VS Code, workspace, and registry |
 | `biosphir --version` | Show the installed CLI version |
@@ -67,10 +67,10 @@ name as its ID. For a stable ID and custom display name, use JSON:
 {"id": "my-project", "name": "My Project"}
 ```
 
-Both `projects` and `open` use discovery. If the folder is already registered,
-it appears once and retains the registry ID and name unless the marker overrides
-them. IDs must be unique across folders. Commit the marker to share it with
-everyone who clones the project.
+The `projects` command lists only folders with a `.biosphir` marker. It uses
+the same recursive search and repeatable `--root` option as `discover` and
+marks entries without a readable ID as `Review`. Commit the marker to share
+it with everyone who clones the project.
 
 ## Discover projects across folders
 

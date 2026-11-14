@@ -34,12 +34,15 @@ def test_version_option():
 
 
 def test_projects(workspace):
-    result = runner.invoke(cli.app, ["projects"])
+    folder = workspace / "group" / "marked"
+    folder.mkdir(parents=True)
+    (folder / ".biosphir").write_text('{"id":"demo","name":"Demo project"}')
+    result = runner.invoke(cli.app, ["projects", "--root", str(workspace)])
     assert result.exit_code == 0
-    assert "Notcher" in result.stdout
+    assert "Notcher" not in result.stdout
     assert "Local repo" in result.stdout
-    assert "Notcher folder" in result.stdout
-    assert "Missing" in result.stdout
+    assert "Demo project" in result.stdout
+    assert "Available" in result.stdout
 
 
 def test_open(workspace, monkeypatch):
@@ -65,7 +68,7 @@ def test_open_errors(workspace, project, message):
 
 def test_invalid_registry(workspace):
     (workspace / "projects.json").write_text("invalid", encoding="utf-8")
-    result = runner.invoke(cli.app, ["projects"])
+    result = runner.invoke(cli.app, ["open", "notcher"])
     assert result.exit_code == 1
     assert "Cannot load registry" in result.stderr
 
@@ -85,7 +88,7 @@ def test_discovery(workspace, monkeypatch):
     folder.mkdir()
     marker = folder / ".biosphir"
     marker.touch()
-    assert "new project" in runner.invoke(cli.app, ["projects"]).stdout
+    assert "Review" in runner.invoke(cli.app, ["projects", "--root", str(workspace)]).stdout
 
     marker.write_text('{"id": "new", "name": "New Display Name"}', encoding="utf-8")
     launched = []
@@ -103,8 +106,7 @@ def test_registered_folder_with_marker_is_listed_once(workspace):
     (folder / ".biosphir").touch()
     result = runner.invoke(cli.app, ["projects"])
     assert result.exit_code == 0
-    assert result.stdout.count("Notcher folder") == 1
-    assert "Available" in result.stdout
+    assert result.stdout.count("Review") == 1
 
 
 @pytest.mark.parametrize("explicit_folder", [False, True])
