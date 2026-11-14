@@ -141,3 +141,11 @@ The name is saved in `.biosphir`. The project ID and folder path stay the same.
 Run `biosphir projects run project-id main.py` to execute a Python script from
 the project folder. It uses the project's `.venv` when available and otherwise
 uses the base Python installation behind the CLI.
+
+## Updating
+
+Exit interactive mode and run `biosphir --update` from your terminal. The CLI
+checks the latest stable GitHub release and installs it only when it is newer.
+Published release tags must use a version such as `v0.2.0` and match the version
+in `pyproject.toml`. On Windows, wait for the installer output before reopening
+BIOSPHIR and checking `biosphir --version`.

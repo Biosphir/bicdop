@@ -128,7 +128,16 @@ def main(
     show_version: Annotated[
         bool, typer.Option("--version", help="Show the BIOSPHIR CLI version.")
     ] = False,
+    update: Annotated[bool, typer.Option("--update", help="Install the latest stable GitHub release.")] = False,
 ) -> None:
+    if update:
+        from .updater import update_cli
+
+        try:
+            update_cli(version("biosphir-cli"))
+        except (OSError, ValueError, RuntimeError) as exc:
+            fail(f"Update failed: {exc}")
+        raise typer.Exit()
     if show_version:
         typer.echo(f"BIOSPHIR CLI v{version('biosphir-cli')}")
         raise typer.Exit()
@@ -175,6 +184,9 @@ def interactive_shell() -> None:
                 continue
             selected_project = args[2].strip().lower()
             typer.echo(f"Selected {selected_project}: {marker.parent}")
+            continue
+        if args == ["--update"]:
+            typer.echo("Type exit, then run biosphir --update from your terminal.")
             continue
         if args and args[0] == "run":
             if selected_project is None:
