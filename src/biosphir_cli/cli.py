@@ -368,8 +368,11 @@ def marker_defaults(folder: Path) -> dict[str, str]:
 def plant(
     marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
     folder: Annotated[
-        str, typer.Argument(help="Folder path or BIOSPHIR_WORKSPACE for bulk planting.")
-    ] = ".",
+        str | None, typer.Argument(help="Folder path or BIOSPHIR_WORKSPACE for bulk planting.")
+    ] = None,
+    to: Annotated[
+        str | None, typer.Option("--to", help="First folder path or BIOSPHIR_WORKSPACE.")
+    ] = None,
     additional_folders: Annotated[
         list[str] | None, typer.Option("--and", help="Additional folder path. Repeat as needed.")
     ] = None,
@@ -378,7 +381,9 @@ def plant(
     ] = False,
 ) -> None:
     """Create a .biosphir marker in a folder or across the workspace."""
-    folders = [folder, *(additional_folders or [])]
+    if folder is not None and to is not None:
+        fail("Provide the first folder either as an argument or with --to.")
+    folders = [to or folder or ".", *(additional_folders or [])]
     for item in folders:
         marker_path(marker, workspace_path() if item == "BIOSPHIR_WORKSPACE" else Path(item))
     for item in folders:
@@ -669,12 +674,17 @@ def clone_project(
     destination: Annotated[
         Path | None, typer.Argument(help="New folder path. Workspace copies default to the current directory.")
     ] = None,
+    to: Annotated[
+        Path | None, typer.Option("--to", help="Destination folder for the first clone.")
+    ] = None,
     additional_projects: Annotated[
         list[str] | None, typer.Option("--and", help="Additional project ID or BIOSPHIR_WORKSPACE. Repeat as needed.")
     ] = None,
 ) -> None:
     """Duplicate projects or the workspace, including their files."""
-    plan = [clone_paths(project, destination)]
+    if destination is not None and to is not None:
+        fail("Provide the destination either as an argument or with --to.")
+    plan = [clone_paths(project, to if to is not None else destination)]
     plan.extend(clone_paths(item, None) for item in additional_projects or [])
     targets = [target.resolve() for _, target in plan]
     if len(set(targets)) != len(targets):

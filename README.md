@@ -199,8 +199,8 @@ Repeat `--and` to add targets:
 ```powershell
 biosphir --clone "project-a" --and "project-b" --and "project-c"
 biosphir --delete "project-a" --and "project-b"
-biosphir --plant .biosphir "D:\Projects\First" --and "D:\Projects\Second"
+biosphir --plant .biosphir --to "D:\Projects\First" --and "D:\Projects\Second"
 ```
 
-For clone, an explicit destination applies to the first project. Additional
-projects use their default destinations.
+Use `--to` once before the first path. For clone, `--to` sets the destination
+for the first project. Additional projects use their default destinations.
