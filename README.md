@@ -60,3 +60,28 @@ bicdop --plant "C:\Projects\My Project"
 immediate subfolders. A path marks only that existing folder.
 `--set-workspace` also creates a marker in the workspace folder itself.
 Existing marker files keep their contents.
+
+## Folder commands
+
+Run `bicdop` to enter the interactive prompt. Type the commands below without
+the `bicdop` prefix at that prompt. `--cd` and `--cd-back` navigate within the
+Bicdop session. `--cd-back` goes to the parent folder. Type `exit` to leave.
+
+```text
+--cd "FOLDER_NAME"
+--cd-back
+--mkdir "NEW_FOLDER_NAME"
+--set-name -to "NEW_FOLDER_NAME"
+--set-name "FOLDER_NAME" -to "NEW_FOLDER_NAME"
+--delete
+--delete "FOLDER_NAME"
+--delete "FOLDER_NAME" --no-confirm
+```
+
+Use quoted folder names, and use workspace names without quotes, such as
+`bicdop --select BIOSPHIR_WORKSPACE`. The rename and delete commands accept
+a direct child name or act on the current folder if the source is omitted.
+Delete removes the folder and all its contents after confirmation, unless
+you supply `--no-confirm`. After a successful current-folder delete, the
+Bicdop session stays in the parent folder. If you rename or delete a registered
+workspace folder, its saved path is not automatically updated.

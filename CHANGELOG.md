@@ -17,3 +17,4 @@
 - Added --select to switch between saved workspaces.
 - Added --show to list workspace folders and flag missing .bicdop markers.
 - Added --plant marker commands and automatic workspace marker creation.
+- Added an interactive prompt with folder navigation, creation, rename, and deletion.
