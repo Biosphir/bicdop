@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
+
+- Open Bicdop without arguments to clear the screen and enter its interactive prompt.
+- Run all commands inside the prompt, including updates.
+- Added `--find .bicdop` to flag markers outside the active workspace.
+
+## Earlier changes
 
 - Added `bicdop --version` to display the installed package version.
 

@@ -61,15 +61,15 @@ def latest_tag() -> str | None:
     return release["tag_name"]
 
 
-def update() -> None:
+def update() -> bool:
     installed = distribution("bicdop")
     tag = latest_tag()
     if tag is None:
         print("No stable Bicdop release is available.")
-        return
+        return False
     if stable_version(tag) <= stable_version(installed.version):
         print(f"Bicdop {installed.version} is up to date.")
-        return
+        return False
 
     command = [sys.executable, "-m", "pip", "install", "--upgrade"]
     if Path(installed.locate_file("")).resolve().is_relative_to(Path(site.getusersitepackages()).resolve()):
@@ -80,3 +80,4 @@ def update() -> None:
         print(f"Update to {tag} started. Wait for pip to finish before reopening Bicdop.")
     else:
         subprocess.run(command, check=True)
+    return True

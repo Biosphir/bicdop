@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -74,21 +75,57 @@ def workspace_folder(entries: dict[str, str], name: str) -> Path:
     return folder
 
 
-def list_workspace_folders() -> list[tuple[str, bool]]:
-    config = workspace_config_path()
+def active_workspace() -> Path | None:
     try:
-        saved = json.loads(config.read_text(encoding="utf-8"))
+        saved = json.loads(workspace_config_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ValueError("No active workspace. Use --set-workspace first.") from None
+        return None
     if not isinstance(saved, dict) or not isinstance(saved.get("path"), str) or not saved["path"]:
         raise ValueError("Invalid active workspace configuration.")
-    folder = Path(saved["path"])
+    return Path(saved["path"]).resolve()
+
+
+def list_workspace_folders() -> list[tuple[str, bool]]:
+    folder = active_workspace()
+    if folder is None:
+        raise ValueError("No active workspace. Use --set-workspace first.")
     if not folder.is_dir():
         raise ValueError(f"Workspace folder no longer exists: {folder}")
     return sorted(
         ((child.name, (child / ".bicdop").is_file()) for child in folder.iterdir() if child.is_dir()),
         key=lambda item: item[0].casefold(),
     )
+
+
+def find_marked_folders() -> list[tuple[Path, bool]]:
+    workspace = active_workspace()
+    roots = [Path.cwd(), *(Path.home() / name for name in ("Documents", "Desktop", "Downloads"))]
+    if workspace is not None:
+        roots.append(workspace)
+
+    def report_error(exc: OSError) -> None:
+        print(f"Skipped: {exc}", file=sys.stderr)
+
+    visited: set[Path] = set()
+    matches = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for directory, children, _ in os.walk(root.resolve(), onerror=report_error):
+            folder = Path(directory)
+            if folder in visited:
+                children.clear()
+                continue
+            visited.add(folder)
+            children[:] = [
+                child for child in children
+                if child not in {".git", ".venv", "node_modules", "__pycache__"}
+                and not (folder / child).is_symlink()
+                and (folder / child).resolve() == folder / child
+            ]
+            if (folder / ".bicdop").is_file():
+                matches.append((folder, workspace is None or not folder.is_relative_to(workspace)))
+    return sorted(matches)
 
 
 def read_workspaces(config: Path) -> dict[str, str]:
