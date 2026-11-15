@@ -6,40 +6,28 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from .markers import MARKER, write_marker
+
 
 def workspace_config_path() -> Path:
     base = os.environ.get("LOCALAPPDATA" if os.name == "nt" else "XDG_CONFIG_HOME")
     return Path(base or Path.home() / ".config") / "bicdop" / "workspace.json"
 
 
-def save_workspace(path: Path, name: str | None) -> tuple[Path, str]:
+def save_workspace(path: Path) -> tuple[Path, str]:
     folder = path.expanduser().resolve()
     if not folder.is_dir():
         raise ValueError(f"Workspace must be an existing directory: {folder}")
-    label = name if name is not None else "-".join((folder.name or folder.anchor).split())
+    label = "-".join((folder.name or folder.anchor).split())
     if not label:
         raise ValueError("Workspace name cannot be blank.")
-    if any(character.isspace() for character in label):
-        raise ValueError("Workspace name cannot contain whitespace. Use underscores or hyphens.")
 
     config = workspace_config_path()
     entries = read_workspaces(config)
-    plant_marker(folder)
+    write_marker(folder, folder)
     entries[label] = str(folder)
     write_workspace(config, entries, folder, label)
     return folder, label
-
-
-def plant_marker(folder: Path) -> bool:
-    marker = folder / ".bicdop"
-    try:
-        with marker.open("x", encoding="utf-8"):
-            pass
-    except FileExistsError:
-        if not marker.is_file():
-            raise ValueError(f"Marker path is not a file: {marker}") from None
-        return False
-    return True
 
 
 def plant_markers(target: str) -> None:
@@ -54,8 +42,8 @@ def plant_markers(target: str) -> None:
             if child.is_dir() and not child.is_symlink() and child.resolve() == child
         )
     for directory in folders:
-        created = plant_marker(directory)
-        print(f"{'Created' if created else 'Already exists'}: {directory / '.bicdop'}")
+        updated = write_marker(directory, directory)
+        print(f"{'Marker saved' if updated else 'Marker kept'}: {directory / MARKER}")
 
 
 def select_workspace(name: str) -> Path:
@@ -63,6 +51,26 @@ def select_workspace(name: str) -> Path:
     entries = read_workspaces(config)
     folder = workspace_folder(entries, name)
     write_workspace(config, entries, folder, name)
+    return folder
+
+
+def rename_workspace(new_name: str) -> Path:
+    if not new_name or any(character.isspace() for character in new_name):
+        raise ValueError("Workspace name must be nonempty and cannot contain whitespace.")
+    active = active_workspace_details()
+    if active is None:
+        raise ValueError("No active workspace. Use --set-workspace first.")
+    current_name, folder = active
+    config = workspace_config_path()
+    entries = read_workspaces(config)
+    if current_name not in entries:
+        current_name = "-".join(current_name.split())
+    if current_name not in entries or Path(entries[current_name]).resolve() != folder:
+        raise ValueError("Active workspace does not match its saved entry.")
+    if new_name != current_name and new_name in entries:
+        raise ValueError(f"Workspace name already exists: {new_name}")
+    entries[new_name] = entries.pop(current_name)
+    write_workspace(config, entries, folder, new_name)
     return folder
 
 
@@ -75,14 +83,21 @@ def workspace_folder(entries: dict[str, str], name: str) -> Path:
     return folder
 
 
-def active_workspace() -> Path | None:
+def active_workspace_details() -> tuple[str, Path] | None:
     try:
         saved = json.loads(workspace_config_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
     if not isinstance(saved, dict) or not isinstance(saved.get("path"), str) or not saved["path"]:
         raise ValueError("Invalid active workspace configuration.")
-    return Path(saved["path"]).resolve()
+    folder = Path(saved["path"]).resolve()
+    name = saved.get("name")
+    return (name if isinstance(name, str) and name else folder.name or folder.anchor), folder
+
+
+def active_workspace() -> Path | None:
+    details = active_workspace_details()
+    return details[1] if details else None
 
 
 def list_workspace_folders() -> list[tuple[str, bool]]:
@@ -92,7 +107,7 @@ def list_workspace_folders() -> list[tuple[str, bool]]:
     if not folder.is_dir():
         raise ValueError(f"Workspace folder no longer exists: {folder}")
     return sorted(
-        ((child.name, (child / ".bicdop").is_file()) for child in folder.iterdir() if child.is_dir()),
+        ((child.name, (child / MARKER).is_file()) for child in folder.iterdir() if child.is_dir()),
         key=lambda item: item[0].casefold(),
     )
 
@@ -123,7 +138,7 @@ def find_marked_folders() -> list[tuple[Path, bool]]:
                 and not (folder / child).is_symlink()
                 and (folder / child).resolve() == folder / child
             ]
-            if (folder / ".bicdop").is_file():
+            if (folder / MARKER).is_file():
                 matches.append((folder, workspace is None or not folder.is_relative_to(workspace)))
     return sorted(matches)
 

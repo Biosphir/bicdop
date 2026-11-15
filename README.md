@@ -27,22 +27,25 @@ package version `0.2.0`.
 ## Set a workspace
 
 ```powershell
---set-workspace "C:\Projects\My Project" --set-name BIOSPHIR_WORKSPACE
---set-workspace --set-name CURRENT_WORKSPACE
+--set-workspace "C:\Projects\My Project" --setBIOSPHIR_WORKSPACE
+--set-workspace --setCURRENT_WORKSPACE
 --set-workspace
 ```
 
 The path must be an existing folder. With no path, Bicdop saves the current
-directory. Names cannot contain whitespace. With no name, Bicdop uses the folder
-name and replaces whitespace with hyphens. On Windows the selection is
+directory. Bicdop uses the folder name and replaces whitespace with hyphens.
+`--set-name` is for renaming folders. On Windows the selection is
 saved in `%LOCALAPPDATA%\bicdop\workspace.json`.
 
 Save another workspace with `--set-workspace`, then switch between saved
 workspaces by name:
 
 ```powershell
---select BIOSPHIR_WORKSPACE
+--select My-Project
 ```
+
+`--set-name-workspace NEW_NAME` changes the active workspace name without
+renaming the folder. Workspace names cannot contain whitespace.
 
 Saving a workspace also makes it active. Selecting one updates Bicdop's
 configuration and leaves the terminal's current directory as it is.
@@ -73,15 +76,15 @@ Bicdop session. `--cd-back` goes to the parent folder. Type `exit` to leave.
 --cd "FOLDER_NAME"
 --cd-back
 --mkdir "NEW_FOLDER_NAME"
---set-name -to "NEW_FOLDER_NAME"
---set-name "FOLDER_NAME" -to "NEW_FOLDER_NAME"
+--set-to "NEW_FOLDER_NAME"
+--set"FOLDER_NAME" -to "NEW_FOLDER_NAME"
 --delete
 --delete "FOLDER_NAME"
 --delete "FOLDER_NAME" --no-confirm
 ```
 
-Use quoted folder names, and use workspace names without quotes, such as
-`--select BIOSPHIR_WORKSPACE`. The rename and delete commands accept
+Use quotes around paths and folder names containing spaces. Workspace names can be used without quotes, such as
+`--select My-Project`. The rename and delete commands accept
 a direct child name or act on the current folder if the source is omitted.
 Delete removes the folder and all its contents after confirmation, unless
 you supply `--no-confirm`. After a successful current-folder delete, the
@@ -92,3 +95,39 @@ Use `--find .bicdop` to search recursively from the current folder, the active
 workspace, and your Documents, Desktop, and Downloads folders. Results outside
 the active workspace are yellow in the terminal. With no active workspace,
 all matches are labeled as outside the workspace.
+
+## Find and collect projects
+
+`--find .bicdop` lists full paths for marked folders in the documented search
+locations. The prompt always displays the current workspace name and path.
+
+```text
+--delete "Folder One", "Folder Two" --no-confirm
+--collect
+--collect --copy
+```
+
+A comma separates direct child names for deletion. Bicdop validates all targets
+before deleting and asks once unless you pass `--no-confirm`.
+
+Collect previews the source and destination for each marked folder outside the
+workspace, then asks for confirmation. Nested marked folders move or copy with
+their marked ancestor. Collect skips folders containing the active workspace,
+current directory or home directory. Destination name conflicts stop the
+operation before any changes. Moving requires the same drive. Use
+`--collect --copy` to copy from another drive and retain the originals.
+
+A `.bicdop` marker stores `folder_name` and `folder_path`. Bicdop refreshes
+these fields when renaming, moving, or copying marked folders. After an
+external rename, `--find .bicdop` shows the actual path. Run `--plant -here`
+inside the renamed folder to refresh its marker. Refreshing a marker also
+removes its former ID field.
+
+Use plain folder names or quoted paths. Quote names containing spaces.
+Separate multiple folders with commas. Use the full quoted path when a name is ambiguous.
+
+```text
+--collect "Project One", "Project Two", "C:\Downloads\Another Folder"
+--collect "C:\Downloads\Project One" --copy
+--delete "Folder One", "Folder Two" --no-confirm
+```

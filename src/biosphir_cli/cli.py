@@ -1,16 +1,17 @@
 """Bicdop command-line entry point."""
 
 import os
-import shlex
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
 from importlib.metadata import version
 from subprocess import CalledProcessError
 
-from .folders import change_folder, delete_folder, make_folder, rename_folder
+from .prompt import command_tokens, prompt_session
+from .help_view import show_help
+from .folders import change_folder, collect_folders, delete_folders, direct_child, make_folder, one_folder, rename_folder
 from .updater import update
-from .workspace import find_marked_folders, list_workspace_folders, plant_markers, save_workspace, select_workspace
+from .workspace import active_workspace_details, find_marked_folders, list_workspace_folders, plant_markers, rename_workspace, save_workspace, select_workspace
 
 
 def app(prog_name: str = "bicdop") -> None:
@@ -30,17 +31,19 @@ def interactive(prog_name: str) -> None:
     print("You are now in the Bicdop interactive interface.")
     print("Type --help for commands or exit to leave Bicdop.")
     print()
+    session = prompt_session()
     while True:
         try:
-            line = input(f"bicdop [{Path.cwd()}]> ").strip()
+            try:
+                active = active_workspace_details()
+                workspace = f"{active[0]} ({active[1]})" if active else "none"
+            except (OSError, ValueError):
+                workspace = "unavailable"
+            line = session.prompt(f"bicdop [workspace: {workspace}] [{Path.cwd()}]> ").strip()
             if line.lower() in {"exit", "quit"}:
                 return
             if line:
-                lexer = shlex.shlex(line, posix=True)
-                lexer.whitespace_split = True
-                lexer.commenters = ""
-                lexer.escape = ""
-                if run_command(prog_name, list(lexer)):
+                if run_command(prog_name, command_tokens(line)):
                     return
         except EOFError:
             return
@@ -56,78 +59,97 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
     parser = ArgumentParser(
         prog=prog_name,
         description="Bicdop by BIOSPHIR.",
+        usage="%(prog)s [command] (type --help for examples)",
+        add_help=False,
     )
     actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("-h", "--help", action="store_true")
     actions.add_argument("--update", action="store_true", help="Install the latest stable GitHub release.")
     actions.add_argument("--version", action="store_true", help="Show the installed Bicdop version.")
     actions.add_argument(
-        "--set-workspace", nargs="?", const=".", metavar="PATH",
+        "--set-workspace", nargs="*", metavar="FOLDER",
         help="Save a workspace and create its marker. Defaults to the current folder.",
     )
+    actions.add_argument("--set-name-workspace", metavar="NEW_NAME", help="Rename the active workspace.")
     actions.add_argument("--select", metavar="NAME", help="Select a saved workspace by name.")
     actions.add_argument("--find", choices=[".bicdop"], help="Find folders containing a .bicdop marker.")
+    actions.add_argument("--collect", nargs="*", metavar="FOLDER", help="Move marked folders into the active workspace, optionally by folder name or path.")
+    parser.add_argument("--copy", action="store_true", help="Copy folders with --collect.")
     actions.add_argument("--show", action="store_true", help="List folders in the active workspace.")
     parser.add_argument(
-        "--set-name", nargs="?", const=".", metavar="NAME",
-        help="Name a workspace, or rename a folder when used with -to.",
+        "--set-name", nargs="*", metavar="NAME",
+        help="Rename a folder with -to. Defaults to the current folder.",
     )
     parser.add_argument("-to", metavar="NEW_NAME", help="New folder name for --set-name.")
     parser.add_argument("--no-confirm", action="store_true", help="Skip --delete confirmation.")
-    actions.add_argument("--cd", metavar="PATH", help="Change folders inside the Bicdop prompt.")
+    actions.add_argument("--cd", nargs="+", metavar="FOLDER", help="Change folders inside the Bicdop prompt.")
     actions.add_argument("--cd-back", action="store_true", help="Go to the parent folder inside the Bicdop prompt.")
-    actions.add_argument("--mkdir", metavar="NAME", help="Create a folder in the current directory.")
-    actions.add_argument("--delete", nargs="?", const=".", metavar="NAME", help="Delete the current folder or a direct child.")
+    actions.add_argument("--mkdir", nargs="+", metavar="NAME", help="Create a folder in the current directory.")
+    actions.add_argument("--delete", nargs="*", metavar="NAME", help="Delete the current folder or direct children separated by commas.")
     actions.add_argument(
-        "--plant", metavar="PATH|-here|-all",
+        "--plant", nargs="+", metavar="FOLDER",
         help="Create .bicdop in a folder, the current folder, or the current folder and its direct children.",
     )
-    argv = argv.copy()
-    # Pass the two dash-prefixed modes as values instead of argparse options.
-    for index, argument in enumerate(argv[:-1]):
-        if argument == "--plant" and argv[index + 1] in ("-here", "-all"):
-            argv[index:index + 2] = [f"--plant={argv[index + 1]}"]
-            break
-    args = parser.parse_args(argv)
+    # These tokens belong to folder selectors, rather than argparse options.
+    escaped = {"-here", "-all"}
+    prefix = "\0selector"
+    args = parser.parse_args([prefix + arg if arg in escaped else arg for arg in argv])
+    for value in vars(args).values():
+        if isinstance(value, list):
+            value[:] = [item.removeprefix(prefix) for item in value]
+    if args.help or not argv:
+        show_help()
+        return
+    if args.copy and args.collect is None:
+        parser.error("--copy requires --collect.")
     if args.no_confirm and args.delete is None:
         parser.error("--no-confirm requires --delete.")
     if args.to is not None:
         if args.set_name is None or any((
-            args.set_workspace is not None, args.select is not None, args.show, args.find is not None,
+            args.set_workspace is not None, args.set_name_workspace is not None, args.select is not None, args.show, args.find is not None, args.collect is not None,
             args.version, args.update, args.plant is not None, args.cd is not None,
             args.cd_back, args.mkdir is not None, args.delete is not None,
         )):
             parser.error("Use --set-name [FOLDER_NAME] -to NEW_NAME on its own.")
-    elif args.set_name is not None and args.set_workspace is None:
-        parser.error("--set-name requires --set-workspace or -to.")
+    elif args.set_name is not None:
+        parser.error("--set-name is only for renaming folders. Use -to NEW_NAME.")
     try:
         if args.cd is not None or args.cd_back:
-            change_folder(Path(args.cd).expanduser() if args.cd is not None else Path.cwd().parent)
+            change_folder(one_folder(args.cd) if args.cd is not None else Path.cwd().parent)
             return
         if args.mkdir is not None:
-            make_folder(args.mkdir)
+            if len(args.mkdir) != 1:
+                raise ValueError("Specify one folder name. Quote names containing spaces.")
+            make_folder(args.mkdir[0])
             return
         if args.to is not None:
-            rename_folder(args.set_name, args.to)
+            rename_folder(direct_child(one_folder(args.set_name)) if args.set_name else ".", args.to)
             return
         if args.delete is not None:
-            delete_folder(args.delete, args.no_confirm)
+            delete_folders(args.delete, args.no_confirm)
             return
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Folder command failed: {exc}\n")
     if args.set_workspace is not None:
-        if args.set_name == ".":
-            parser.error("--set-name requires a workspace name.")
         try:
-            folder, name = save_workspace(Path(args.set_workspace), args.set_name)
+            folder, name = save_workspace(one_folder(args.set_workspace) if args.set_workspace else Path.cwd())
         except (OSError, ValueError) as exc:
             parser.exit(1, f"Could not save workspace: {exc}\n")
         print(f"Workspace saved: {name} ({folder})")
         return
     if args.plant is not None:
         try:
-            plant_markers(args.plant)
+            target = args.plant[0] if args.plant in (["-here"], ["-all"]) else str(one_folder(args.plant))
+            plant_markers(target)
         except (OSError, ValueError) as exc:
             parser.exit(1, f"Could not plant marker: {exc}\n")
+        return
+    if args.set_name_workspace is not None:
+        try:
+            folder = rename_workspace(args.set_name_workspace)
+        except (OSError, ValueError) as exc:
+            parser.exit(1, f"Could not rename workspace: {exc}\n")
+        print(f"Active workspace: {args.set_name_workspace} ({folder})")
         return
     if args.select is not None:
         try:
@@ -135,6 +157,12 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
         except (OSError, ValueError) as exc:
             parser.exit(1, f"Could not select workspace: {exc}\n")
         print(f"Active workspace: {args.select} ({folder})")
+        return
+    if args.collect is not None:
+        try:
+            collect_folders(copy=args.copy, arguments=args.collect)
+        except (OSError, ValueError) as exc:
+            parser.exit(1, f"Could not collect folders: {exc}\n")
         return
     if args.find is not None:
         try:
@@ -144,7 +172,9 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
         if not folders:
             print("No .bicdop markers found.")
         for folder, outside in folders:
-            label = f"{folder} (outside workspace)" if outside else str(folder)
+            label = str(folder)
+            if outside:
+                label += " (outside workspace)"
             print(f"\x1b[33m{label}\x1b[0m" if outside and sys.stdout.isatty() else label)
         return
     if args.show:
@@ -165,7 +195,7 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
         print(f"Bicdop v{version('bicdop')}")
         return
     if not args.update:
-        parser.print_help()
+        show_help()
         return
 
     try:

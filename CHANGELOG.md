@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.4
+
+- Added --set-name-workspace to rename the active workspace.
+
+- Store folder name and path in markers and support selection by name or quoted path.
+
+- Show the active workspace in the prompt and color interactive input.
+- Support comma-separated deletion and collect marked folders into the workspace.
+
 ## 0.3.3
 
 - Added a startup header to the interactive prompt.

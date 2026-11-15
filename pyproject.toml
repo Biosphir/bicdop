@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bicdop"
-version = "0.3.3"
+version = "0.3.4"
 description = "Bicdop, BIOSPHIR Integrated Command & Development Operations Platform"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["prompt-toolkit>=3,<4"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
