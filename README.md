@@ -37,8 +37,8 @@ and wait for it to finish.
 Install Python 3.10 or newer and Git.
 
 ```powershell
-git clone https://github.com/Biosphir/biosphir-cli.git
-cd biosphir-cli
+git clone https://github.com/Biosphir/bicdop.git
+cd bicdop
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install .
 .\.venv\Scripts\bicdop.exe
@@ -237,8 +237,39 @@ For development, install dependencies with `python -m pip install -e ".[test]"` 
 ## Project markers
 
 
-When upgrading an existing installation, uninstall the old distribution first with `python -m pip uninstall biosphir-cli`, then install Bicdop in the same environment. This avoids two distributions owning the same Python package and executable.
 
-Bicdop discovers projects with a `.bicdop` marker. To migrate a project, rename its existing marker to `.bicdop` if that filename is available. Keep the JSON contents intact. Gwen launch configurations should invoke `bicdop`. Existing workspace settings are still read from the original configuration path, and legacy environment variables are accepted as fallbacks.
+Bicdop discovers projects with a `.bicdop` marker. To migrate a project, rename its existing marker to `.bicdop` if that filename is available. Keep the JSON contents intact. Gwen launch configurations should invoke `bicdop`. New workspace settings are saved under bicdop. Legacy environment variables are accepted as fallbacks.
 
 For the registry and task runner, see [Configured projects](CONFIGURED_PROJECTS.md). The option-style commands above cover the existing workspace workflow.
+
+## Windows installer
+
+On Windows x64, download `BicdopSetup-x64.exe` from a stable release at
+https://github.com/Biosphir/bicdop/releases. Run Setup, then open a new PowerShell
+window and run `bicdop --version`. Setup installs for the current user, defaults
+to `%LOCALAPPDATA%\Programs\Bicdop`, and offers to add that folder to the user PATH.
+The installer bundles the Python runtime Bicdop uses. If your projects need their
+own Python, select the optional Python 3.12.10 download during setup.
+Remove Bicdop through Windows Settings → Apps → Installed apps. The optional
+Python installation is managed separately in Windows.
+
+Run `bicdop --update` outside interactive mode. The Windows installer edition
+checks for a newer stable GitHub release, downloads `BicdopSetup-x64.exe`,
+checks its size and SHA-256 against GitHub release metadata, then opens Setup
+for you to complete. The pip edition continues to use the tagged source release.
+
+### Build the Windows installer
+
+Use 64-bit Python and Inno Setup 6 on a Windows build machine:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install . 'pyinstaller>=6,<7'
+.\packaging\build-windows.ps1 -Python .\.venv\Scripts\python.exe
+```
+
+The output is `dist/BicdopSetup-x64.exe`. For a release, match the version in
+`pyproject.toml` to the GitHub Release tag (for example `0.2.0` and `v0.2.0`),
+then attach the compiled installer using the exact filename. The updater
+requires GitHub to report a SHA-256 digest for the asset. A push to the default
+branch does not trigger an update by itself.

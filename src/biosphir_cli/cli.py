@@ -51,7 +51,7 @@ def registry_path() -> Path:
 
 def workspace_config_path() -> Path:
     base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CONFIG_HOME")
-    return Path(base or Path.home() / ".config") / "biosphir-cli" / "workspace.json"
+    return Path(base or Path.home() / ".config") / "bicdop" / "workspace.json"
 
 
 def workspace_path() -> Path:
@@ -305,7 +305,8 @@ def interactive_shell() -> None:
                 if args[0] == "--run":
                     app(args=[*args, "--interactive-session"], prog_name="bicdop", standalone_mode=False)
                 else:
-                    subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
+                    launcher = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "biosphir_cli"]
+                    subprocess.run([*launcher, *args], check=False)
             except _click.ClickException as exc:
                 exc.show()
             except KeyboardInterrupt:
@@ -602,6 +603,15 @@ def select_project(
     fail("Start interactive mode with biosphir, then run --select PROJECT_ID.")
 
 
+def project_python() -> str:
+    if not getattr(sys, "frozen", False):
+        return getattr(sys, "_base_executable", None) or sys.executable
+    python = shutil.which("python.exe")
+    if not python or Path(python).parent.name.lower() == "windowsapps":
+        fail("Install Python for project development and make it available on PATH.")
+    return python
+
+
 @app.command("--setup", context_settings={"help_option_names": ["--help"]})
 def setup_project(project_id: str) -> None:
     """Prepare a project's Python environment and install requirements."""
@@ -612,10 +622,9 @@ def setup_project(project_id: str) -> None:
 
     environment = folder / ".venv"
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    base_python = getattr(sys, "_base_executable", None) or sys.executable
     try:
         if not python.is_file():
-            subprocess.run([base_python, "-m", "venv", str(environment)], cwd=folder, check=True)
+            subprocess.run([project_python(), "-m", "venv", str(environment)], cwd=folder, check=True)
         subprocess.run(
             [str(python), "-m", "pip", "install", "-r", str(requirements)],
             cwd=folder,
@@ -731,7 +740,7 @@ def run_project(
 
     executable = folder / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not executable.is_file():
-        executable = Path(getattr(sys, "_base_executable", None) or sys.executable)
+        executable = Path(project_python())
     command = [str(executable), str(target)]
     try:
         if background:

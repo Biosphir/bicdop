@@ -9,8 +9,12 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-import tomli
 import typer
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 project_app = typer.Typer(help="Register and unregister local projects.")
 CONFIG = "bicdop.toml"
@@ -132,8 +136,8 @@ def init(yes: bool = typer.Option(False, "--yes")) -> None:
 def load_config(root: Path) -> dict:
     with (root / CONFIG).open("rb") as stream:
         try:
-            config = tomli.load(stream)
-        except tomli.TOMLDecodeError:
+            config = tomllib.load(stream)
+        except tomllib.TOMLDecodeError:
             raise ValueError(f"Invalid TOML syntax in {CONFIG}.") from None
     if type(config.get("version")) is not int or config["version"] != 1:
         raise ValueError(f"{CONFIG} requires version = 1.")
