@@ -49,9 +49,11 @@ workspaces by name:
 renaming the folder. Workspace names cannot contain whitespace.
 
 Saving a workspace also makes it active. Selecting one updates Bicdop's
-configuration and leaves the terminal's current directory as it is.
+configuration. Use `--goto-workspace` to change the working directory in Bicdop
+to the active workspace.
 
-Use `--show` to list the direct child folders of the active workspace. Folders missing a `.bicdop` file are labeled and shown
+Use `--show` to list direct child folders of the current directory or
+`--projects` to list direct child folders of the active workspace. Both commands display a table. Folders missing a `.bicdop` file are labeled and shown
 in yellow in a terminal.
 
 ## Plant project markers
@@ -155,3 +157,65 @@ same name. Pull requires a clean checkout and accepts only fast-forward
 updates from that branch. Both commands require the connected checkout,
 which prevents running them from another repository by accident. If you
 move the checkout, run `--set-github` again from its new location.
+
+## Run a project
+
+Run `--run ProjectName` from the Bicdop prompt. Bicdop looks for the folder
+in the current location first, then in the active workspace. A quoted project
+path also works. The folder must have a `.bicdop` marker. New markers record
+`main.py` when it exists. For a different Python file, enter the project and
+run `--set-main app.py` or `--set-main "src/app.py"`. The path is stored
+relative to the project, and the script runs from the project folder using
+the Python interpreter running Bicdop.
+
+Use `--info ProjectName` to see which folder, marker, main file, and Python
+interpreter Bicdop resolves. It uses the same folder search as `--run`.
+
+## Prepare and diagnose a Python project
+
+```text
+--info Demo
+--status Demo
+--doctor Demo
+--setup Demo
+--run Demo
+--test Demo
+```
+
+`--doctor` checks the marker, main file, and interpreter. `--setup` creates
+or reuses the project's `.venv` and asks before installing `requirements.txt`.
+Bicdop prefers the project's `.venv` and otherwise uses its own Python
+interpreter. `--test` runs pytest and requires it to be installed in that
+interpreter. Add `--` to pass options or select a test file, for example
+`--test Demo -- "tests/test_auth.py" -q`. `--status` shows the branch,
+change count, Python environment, and main file.
+
+Bicdop saves GitHub connections separately for each local Git checkout. The
+header follows the current directory, and push and pull use that checkout's
+saved repository. The previous single connection is read and retained when
+you add another checkout.
+
+Use `--build Demo` to run `python -m build` with the project interpreter.
+The project needs a `pyproject.toml` and the Python `build` package.
+Output is written to the project's `dist` directory. The build backend can
+install build-time dependencies in its isolated environment.
+
+Use `--git-status` from the current checkout, or pass a project folder.
+It displays changed files and ahead/behind information from the last
+locally known upstream state.
+
+## Review and commit local Git changes
+
+Run these commands inside the checkout:
+
+```text
+--diff
+--stage app.py, "test app.py"
+--diff --staged
+--commit "Describe the changes"
+```
+
+`--diff` shows unstaged changes to tracked files. Use `--diff --staged`
+to inspect the next commit. Stage individual files, separating multiple
+names with commas. `--commit` previews the staged file list and asks for
+confirmation. Use `--push` separately when ready to send commits.

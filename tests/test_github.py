@@ -9,6 +9,8 @@ from biosphir_cli import github
 
 @pytest.fixture
 def checkout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
     config = tmp_path / "config" / "github.json"
     monkeypatch.setattr(github, "repository_config", lambda: config)
     monkeypatch.setattr(github, "checkout", lambda git: tmp_path)
@@ -55,7 +57,7 @@ def test_transfers_use_bound_repo_and_branch(checkout, monkeypatch):
 
 def test_rejects_wrong_checkout_and_dirty_pull(checkout, monkeypatch):
     github.save_repository("https://github.com/BIOSPHIR/demo.git", checkout / "other")
-    with pytest.raises(ValueError, match="connected checkout"):
+    with pytest.raises(ValueError, match="No GitHub connection for this checkout"):
         github.transfer("push")
     github.save_repository("https://github.com/BIOSPHIR/demo.git", checkout)
     monkeypatch.setattr(github, "authenticate", Mock())
@@ -65,3 +67,24 @@ def test_rejects_wrong_checkout_and_dirty_pull(checkout, monkeypatch):
     }[command])
     with pytest.raises(ValueError, match="Commit or stash"):
         github.transfer("pull")
+
+
+def test_checkout_connections_preserve_previous_config(checkout, monkeypatch):
+    import json
+
+    other = checkout / "other"
+    (other / ".git").mkdir(parents=True)
+    subfolder = other / "src"
+    subfolder.mkdir()
+    config = github.repository_config()
+    config.parent.mkdir()
+    original_url = "https://github.com/BIOSPHIR/first.git"
+    other_url = "https://github.com/BIOSPHIR/second.git"
+    config.write_text(json.dumps({"checkout": str(checkout), "url": original_url}), encoding="utf-8")
+    assert github.active_repository() == (original_url, checkout)
+    github.save_repository(other_url, other)
+    monkeypatch.chdir(subfolder)
+    assert github.active_repository() == (other_url, other)
+    monkeypatch.chdir(checkout)
+    assert github.active_repository() == (original_url, checkout)
+    assert github.read_repositories() == {checkout: original_url, other: other_url}

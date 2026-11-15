@@ -1,8 +1,24 @@
 # Changelog
 
+## 0.3.8
+
+- Added local Git diff, selective staging, and confirmed commits.
+
+- Added `--build` for Python packages and `--git-status` for change and upstream details.
+
+- Added project status, pytest argument forwarding, and GitHub connections per checkout.
+
+- Added `--doctor`, `--setup`, and `--test` with shared project Python selection.
+
+- Added `--info` for inspecting project locations, markers, main files, and Python.
+
+- Store a Python main file in project markers and run it with `--run`.
+
+- List current folders with `--show` and active workspace folders with `--projects`.
+
 ## 0.3.7
 
-- Bumped the package version for the next release.
+- Added `--goto-workspace` to navigate to the active workspace.
 
 ## 0.3.6
 

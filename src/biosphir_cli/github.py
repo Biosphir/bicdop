@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from .folders import confirm, folder_names
 from .workspace import workspace_config_path
 
 REPOSITORY = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_.-]+)/?", re.IGNORECASE)
@@ -30,27 +31,52 @@ def repository_config() -> Path:
     return workspace_config_path().with_name("github.json")
 
 
-def active_repository() -> tuple[str, Path] | None:
+def read_repositories() -> dict[Path, str]:
     try:
-        entry = json.loads(repository_config().read_text(encoding="utf-8"))
+        data = json.loads(repository_config().read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None
-    if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) for key in ("url", "checkout")):
+        return {}
+    if not isinstance(data, dict):
         raise ValueError("Invalid GitHub configuration. Set the repository again.")
-    path = Path(entry["checkout"])
-    if not path.is_absolute():
-        raise ValueError("Invalid saved Git checkout path.")
-    return repository_url(entry["url"])[0], path
+    entries = data.get("repositories")
+    if entries is None:
+        old_path = data.get("checkout")
+        if not isinstance(old_path, str):
+            raise ValueError("Invalid saved Git checkout path.")
+        entries = {old_path: data.get("url")}
+    if not isinstance(entries, dict):
+        raise ValueError("Invalid saved GitHub repositories.")
+    repositories = {}
+    for path, url in entries.items():
+        checkout_path = Path(path)
+        if not checkout_path.is_absolute() or not isinstance(url, str):
+            raise ValueError("Invalid saved GitHub repository.")
+        repositories[checkout_path.resolve()] = repository_url(url)[0]
+    return repositories
+
+
+def active_repository() -> tuple[str, Path] | None:
+    repositories = read_repositories()
+    if not repositories:
+        return None
+    current = Path.cwd().resolve()
+    for directory in (current, *current.parents):
+        if (directory / ".git").exists():
+            url = repositories.get(directory)
+            return (url, directory) if url else None
+    return None
 
 
 def save_repository(url: str, path: Path) -> None:
+    repositories = read_repositories()
+    repositories[path.resolve()] = repository_url(url)[0]
     config = repository_config()
     config.parent.mkdir(parents=True, exist_ok=True)
     staged = None
     try:
         with NamedTemporaryFile(dir=config.parent, delete=False, mode="w", encoding="utf-8") as stream:
             staged = Path(stream.name)
-            json.dump({"url": url, "checkout": str(path)}, stream, indent=2)
+            json.dump({"repositories": {str(folder): remote for folder, remote in repositories.items()}}, stream, indent=2)
             stream.write("\n")
         staged.replace(config)
     finally:
@@ -113,13 +139,11 @@ def connect_repository(value: str | None) -> None:
 
 
 def transfer(operation: str) -> None:
-    selected = active_repository()
-    if selected is None:
-        raise ValueError('Set a repository first with --set-github "https://github.com/OWNER/REPO".')
-    url, folder = selected
     git = executable("git")
-    if checkout(git) != folder:
-        raise ValueError(f"Run this command from the connected checkout: {folder}")
+    folder = checkout(git)
+    url = read_repositories().get(folder)
+    if url is None:
+        raise ValueError('No GitHub connection for this checkout. Run --set-github "https://github.com/OWNER/REPO" here.')
     gh = executable("gh")
     authenticate(gh)
     try:
@@ -146,3 +170,49 @@ def transfer(operation: str) -> None:
     )
     print(f"Git {operation}: {url} ({branch})", flush=True)
     subprocess.run([git, *config, operation, *options], cwd=folder, check=True)
+
+
+
+def show_diff(staged: bool) -> None:
+    git = executable("git")
+    checkout(git)
+    args = ["--no-pager", "diff", "--no-ext-diff", "--no-textconv"]
+    if staged:
+        args.append("--cached")
+    result = subprocess.run(
+        [git, *args], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", check=False,
+    )
+    if result.returncode:
+        raise ValueError(result.stderr.strip() or "Could not show Git diff.")
+    if result.stdout:
+        print(result.stdout, end="")
+    else:
+        print("No staged changes." if staged else "No unstaged changes to tracked files.")
+
+
+def stage_files(arguments: list[str]) -> None:
+    git = executable("git")
+    checkout(git)
+    names = folder_names(arguments)
+    if any(Path(name).is_dir() for name in names):
+        raise ValueError("Select individual files to stage.")
+    subprocess.run([git, "--literal-pathspecs", "add", "--", *names], check=True)
+    print(f"Staged {len(names)} file selection(s).")
+
+
+def commit_staged(message: str) -> None:
+    if not message.strip():
+        raise ValueError("Commit message cannot be blank.")
+    git = executable("git")
+    root = checkout(git)
+    staged = git_output(git, "diff", "--cached", "--name-status", "--no-ext-diff", cwd=root)
+    if not staged:
+        raise ValueError("No staged changes. Use --stage to select files first.")
+    index_tree = git_output(git, "write-tree", cwd=root)
+    print(f"Staged changes:\n{staged}", flush=True)
+    if confirm("Commit these staged changes?"):
+        # Commit the same index that was displayed, or stop if it changed.
+        if git_output(git, "write-tree", cwd=root) != index_tree:
+            raise ValueError("The staged changes differ from the preview. Review it and try again.")
+        subprocess.run([git, "commit", "-m", message], cwd=root, check=True)

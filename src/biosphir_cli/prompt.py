@@ -99,7 +99,7 @@ def show_interface(header: Callable[[], str], execute: Callable[[list[str]], boo
                 history.append(str(exc))
                 return
             # Confirmation input and the updater can use the normal console.
-            visible = any(option in arguments for option in ("--delete", "--collect", "--update", "--set-github", "--push", "--pull"))
+            visible = any(option in arguments for option in ("--delete", "--collect", "--update", "--set-github", "--push", "--pull", "--run", "--setup", "--test", "--build", "--commit"))
             result = await run_in_terminal(lambda: invoke(arguments, True)) if visible else invoke(arguments, False)
             if result:
                 application.exit()

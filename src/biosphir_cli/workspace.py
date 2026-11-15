@@ -106,6 +106,10 @@ def list_workspace_folders() -> list[tuple[str, bool]]:
         raise ValueError("No active workspace. Use --set-workspace first.")
     if not folder.is_dir():
         raise ValueError(f"Workspace folder no longer exists: {folder}")
+    return list_folders(folder)
+
+
+def list_folders(folder: Path) -> list[tuple[str, bool]]:
     return sorted(
         ((child.name, (child / MARKER).is_file()) for child in folder.iterdir() if child.is_dir()),
         key=lambda item: item[0].casefold(),
