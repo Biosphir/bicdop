@@ -23,9 +23,38 @@ def save_workspace(path: Path, name: str | None) -> tuple[Path, str]:
 
     config = workspace_config_path()
     entries = read_workspaces(config)
+    plant_marker(folder)
     entries[label] = str(folder)
     write_workspace(config, entries, folder, label)
     return folder, label
+
+
+def plant_marker(folder: Path) -> bool:
+    marker = folder / ".bicdop"
+    try:
+        with marker.open("x", encoding="utf-8"):
+            pass
+    except FileExistsError:
+        if not marker.is_file():
+            raise ValueError(f"Marker path is not a file: {marker}") from None
+        return False
+    return True
+
+
+def plant_markers(target: str) -> None:
+    folder = Path.cwd() if target in ("-here", "-all") else Path(target).expanduser()
+    folder = folder.resolve()
+    if not folder.is_dir():
+        raise ValueError(f"Marker target must be an existing directory: {folder}")
+    folders = [folder]
+    if target == "-all":
+        folders.extend(
+            child for child in sorted(folder.iterdir())
+            if child.is_dir() and not child.is_symlink() and child.resolve() == child
+        )
+    for directory in folders:
+        created = plant_marker(directory)
+        print(f"{'Created' if created else 'Already exists'}: {directory / '.bicdop'}")
 
 
 def select_workspace(name: str) -> Path:

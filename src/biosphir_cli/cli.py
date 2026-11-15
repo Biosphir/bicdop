@@ -7,7 +7,7 @@ from importlib.metadata import version
 from subprocess import CalledProcessError
 
 from .updater import update
-from .workspace import list_workspace_folders, save_workspace, select_workspace
+from .workspace import list_workspace_folders, plant_markers, save_workspace, select_workspace
 
 
 def app(prog_name: str = "bicdop") -> None:
@@ -20,12 +20,22 @@ def app(prog_name: str = "bicdop") -> None:
     actions.add_argument("--version", action="store_true", help="Show the installed Bicdop version.")
     actions.add_argument(
         "--set-workspace", nargs="?", const=".", metavar="PATH",
-        help="Save a workspace folder. Defaults to the current folder.",
+        help="Save a workspace and create its marker. Defaults to the current folder.",
     )
     actions.add_argument("--select", metavar="NAME", help="Select a saved workspace by name.")
     actions.add_argument("--show", action="store_true", help="List folders in the active workspace.")
     parser.add_argument("--set-name", metavar="NAME", help="Name to save with --set-workspace.")
-    args = parser.parse_args()
+    actions.add_argument(
+        "--plant", metavar="PATH|-here|-all",
+        help="Create .bicdop in a folder, the current folder, or the current folder and its direct children.",
+    )
+    argv = sys.argv[1:]
+    # Pass the two dash-prefixed modes as values instead of argparse options.
+    for index, argument in enumerate(argv[:-1]):
+        if argument == "--plant" and argv[index + 1] in ("-here", "-all"):
+            argv[index:index + 2] = [f"--plant={argv[index + 1]}"]
+            break
+    args = parser.parse_args(argv)
     if args.set_name is not None and args.set_workspace is None:
         parser.error("--set-name requires --set-workspace.")
     if args.set_workspace is not None:
@@ -34,6 +44,12 @@ def app(prog_name: str = "bicdop") -> None:
         except (OSError, ValueError) as exc:
             parser.exit(1, f"Could not save workspace: {exc}\n")
         print(f"Workspace saved: {name} ({folder})")
+        return
+    if args.plant is not None:
+        try:
+            plant_markers(args.plant)
+        except (OSError, ValueError) as exc:
+            parser.exit(1, f"Could not plant marker: {exc}\n")
         return
     if args.select is not None:
         try:

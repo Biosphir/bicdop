@@ -47,3 +47,16 @@ configuration and leaves the terminal's current directory as it is.
 
 Use `bicdop --show` to list the direct child folders of the active workspace. Folders missing a `.bicdop` file are labeled and shown
 in yellow in a terminal.
+
+## Plant project markers
+
+```powershell
+bicdop --plant -here
+bicdop --plant -all
+bicdop --plant "C:\Projects\My Project"
+```
+
+`-here` marks the current folder. `-all` marks the current folder and its
+immediate subfolders. A path marks only that existing folder.
+`--set-workspace` also creates a marker in the workspace folder itself.
+Existing marker files keep their contents.
