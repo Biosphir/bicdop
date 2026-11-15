@@ -12,3 +12,7 @@
 - Added a local project registry, versioned task configuration, explicit execution consent, and runtime diagnostics.
 
 - Added a standalone Windows installer and checksum-verified installer updates from GitHub Releases.
+
+- Added --set-workspace and --set-name for saving a named workspace.
+- Added --select to switch between saved workspaces.
+- Added --show to list workspace folders and flag missing .bicdop markers.

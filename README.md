@@ -21,3 +21,29 @@ with pip in the current Python environment. Installations made with `--user`
 keep that scope. On Windows, wait for pip to finish before running Bicdop again.
 Each release tag must match its package version, for example `v0.2.0` for
 package version `0.2.0`.
+
+## Set a workspace
+
+```powershell
+bicdop --set-workspace "C:\Projects\My Project" --set-name BIOSPHIR_WORKSPACE
+bicdop --set-workspace --set-name CURRENT_WORKSPACE
+bicdop --set-workspace
+```
+
+The path must be an existing folder. With no path, Bicdop saves the current
+directory. Names cannot contain whitespace. With no name, Bicdop uses the folder
+name and replaces whitespace with hyphens. On Windows the selection is
+saved in `%LOCALAPPDATA%\bicdop\workspace.json`.
+
+Save another workspace with `--set-workspace`, then switch between saved
+workspaces by name:
+
+```powershell
+bicdop --select BIOSPHIR_WORKSPACE
+```
+
+Saving a workspace also makes it active. Selecting one updates Bicdop's
+configuration and leaves the terminal's current directory as it is.
+
+Use `bicdop --show` to list the direct child folders of the active workspace. Folders missing a `.bicdop` file are labeled and shown
+in yellow in a terminal.
