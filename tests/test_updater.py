@@ -30,4 +30,4 @@ def test_update_installs_newer_release(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", install)
     updater.update_cli("0.9.0")
     assert len(launched) == 1
-    assert launched[0][-1] == f"biosphir-cli @ {updater.REPOSITORY}/archive/refs/tags/v0.10.0.zip"
+    assert launched[0][-1] == f"{updater.REPOSITORY}/archive/refs/tags/v0.10.0.zip"

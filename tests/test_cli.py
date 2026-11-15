@@ -24,13 +24,13 @@ def workspace(tmp_path, monkeypatch):
 def test_version(args):
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
-    assert "BIOSPHIR CLI v0.1.0" in result.stdout
+    assert "Bicdop v0.1.0" in result.stdout
 
 
 def test_version_option():
     result = runner.invoke(cli.app, ["--version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "BIOSPHIR CLI v0.1.0"
+    assert result.stdout.strip() == "Bicdop v0.1.0"
 
 
 def test_projects(workspace, monkeypatch):
@@ -388,3 +388,27 @@ def test_delete_project_with_readonly_git_object(workspace, monkeypatch):
     result = runner.invoke(cli.app, ["--delete", "clone", "--no-confirm"])
     assert result.exit_code == 0, result.output
     assert not folder.exists()
+
+
+def test_bic_marker_discovery_and_legacy_precedence(tmp_path, monkeypatch):
+    monkeypatch.setenv("BIOSPHIR_WORKSPACE", str(tmp_path))
+    project = tmp_path / "project"
+    project.mkdir()
+    legacy = project / ".biosphir"
+    legacy.write_text('{"id":"legacy","name":"Legacy"}', encoding="utf-8")
+    new = project / ".bic"
+    new.write_text('{"id":"modern","name":"Modern"}', encoding="utf-8")
+    monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [project])
+    assert cli.matching_project_markers("modern") == [new]
+    assert legacy.read_text(encoding="utf-8") == '{"id":"legacy","name":"Legacy"}'
+    new.unlink()
+    assert cli.matching_project_markers("legacy") == [legacy]
+
+
+def test_bic_marker_commands(tmp_path):
+    result = runner.invoke(cli.app, ["--plant", ".bic", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".bic").is_file()
+    assert runner.invoke(cli.app, ["--check", ".bic", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(cli.app, ["--delete", ".bic", str(tmp_path)]).exit_code == 0
+    assert not (tmp_path / ".bic").exists()

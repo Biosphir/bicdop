@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "biosphir-cli"
+name = "bicdop"
 version = "0.1.0"
-description = "BIOSPHIR internal developer toolkit"
+description = "Bicdop, BIOSPHIR Integrated Command & Development Operations Platform"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["typer>=0.16,<1", "rich>=13,<16", "tomli>=2,<3"]
@@ -14,7 +14,8 @@ dependencies = ["typer>=0.16,<1", "rich>=13,<16", "tomli>=2,<3"]
 test = ["pytest>=8,<10"]
 
 [project.scripts]
-biosphir = "biosphir_cli.cli:app"
+bicdop = "biosphir_cli.cli:app"
+biosphir = "biosphir_cli.cli:legacy_main"
 
 [tool.setuptools.package-data]
 biosphir_cli = ["projects.json"]

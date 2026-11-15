@@ -1,4 +1,4 @@
-"""Install newer stable releases from the official BIOSPHIR CLI repository."""
+"""Install newer stable releases from the official Bicdop repository."""
 
 import json
 import os
@@ -42,10 +42,10 @@ def latest_tag() -> str | None:
 def update_cli(installed: str) -> None:
     tag = latest_tag()
     if tag is None:
-        typer.echo("No stable BIOSPHIR CLI release has been published on GitHub.")
+        typer.echo("No stable Bicdop release has been published on GitHub.")
         return
     if stable_version(tag) <= stable_version(installed):
-        typer.echo(f"BIOSPHIR CLI {installed} is up to date.")
+        typer.echo(f"Bicdop {installed} is up to date.")
         return
 
     source = f"{REPOSITORY}/archive/refs/tags/{tag}.zip"
@@ -53,11 +53,11 @@ def update_cli(installed: str) -> None:
         uv = shutil.which("uv")
         if uv is None:
             raise RuntimeError("uv is required to update this installation.")
-        command = [uv, "tool", "install", "--force", f"biosphir-cli @ {source}"]
+        command = [uv, "tool", "install", "--force", source]
     else:
-        command = [sys.executable, "-m", "pip", "install", "--upgrade", f"biosphir-cli @ {source}"]
+        command = [sys.executable, "-m", "pip", "install", "--upgrade", source]
 
-    typer.echo(f"Updating BIOSPHIR CLI {installed} to {tag}...")
+    typer.echo(f"Updating Bicdop {installed} to {tag}...")
     if os.name == "nt":
         # The helper uses base Python so the tool environment can be replaced.
         helper = """
@@ -76,7 +76,7 @@ if handle:
     status = kernel.WaitForSingleObject(handle, 30000)
     kernel.CloseHandle(handle)
     if status != 0:
-        sys.exit("Update timed out waiting for BIOSPHIR CLI to close.")
+        sys.exit("Update timed out waiting for Bicdop to close.")
 elif ctypes.get_last_error() != 87:
     raise ctypes.WinError(ctypes.get_last_error())
 sys.exit(subprocess.call(sys.argv[2:]))
@@ -86,6 +86,6 @@ sys.exit(subprocess.call(sys.argv[2:]))
             [base_python, "-c", helper, str(os.getpid()), *command],
             stdin=subprocess.DEVNULL,
         )
-        typer.echo("Update started. Wait for the installer output before reopening BIOSPHIR.")
+        typer.echo("Update started. Wait for the installer output before reopening Bicdop.")
     elif subprocess.run(command, check=False).returncode:
         raise RuntimeError("The installer exited with an error.")

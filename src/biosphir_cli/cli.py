@@ -36,9 +36,16 @@ class ActionGroup(TyperGroup):
         return super().parse_args(ctx, args)
 
 
-app = typer.Typer(cls=ActionGroup, context_settings={"help_option_names": []}, help="BIOSPHIR internal developer toolkit.")
+app = typer.Typer(cls=ActionGroup, context_settings={"help_option_names": []}, help="Bicdop — BIOSPHIR Integrated Command & Development Operations Platform. One command. Every project.")
 console = Console()
 error_console = Console(stderr=True)
+
+
+def project_marker(folder: Path) -> Path:
+    """Prefer the Bicdop marker while preserving legacy projects."""
+    new = folder / ".bic"
+    legacy = folder / ".biosphir"
+    return new if new.is_file() or not legacy.is_file() else legacy
 
 
 def registry_path() -> Path:
@@ -115,7 +122,7 @@ def discover_projects() -> dict[str, dict[str, str]]:
         return entries
 
     for folder in sorted(workspace.iterdir(), key=lambda path: path.name.lower()):
-        marker = folder / ".biosphir"
+        marker = project_marker(folder)
         if not folder.is_dir() or not marker.is_file():
             continue
         try:
@@ -173,7 +180,7 @@ def editor_path() -> str | None:
 def main(
     ctx: typer.Context,
     show_version: Annotated[
-        bool, typer.Option("--version", help="Show the BIOSPHIR CLI version.")
+        bool, typer.Option("--version", help="Show the Bicdop version.")
     ] = False,
     update: Annotated[bool, typer.Option("--update", help="Install the latest stable GitHub release.")] = False,
     setting: Annotated[str | None, typer.Option("--set", help="Save BIOSPHIR_WORKSPACE as the current folder.")] = None,
@@ -185,23 +192,23 @@ def main(
         from .updater import update_cli
 
         try:
-            update_cli(version("biosphir-cli"))
+            update_cli(version("bicdop"))
         except (OSError, ValueError, RuntimeError) as exc:
             fail(f"Update failed: {exc}")
         raise typer.Exit()
     if show_version:
-        typer.echo(f"BIOSPHIR CLI v{version('biosphir-cli')}")
+        typer.echo(f"Bicdop v{version('bicdop')}")
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         if sys.stdin.isatty() and sys.stdout.isatty():
             os.system("cls" if os.name == "nt" else "clear")
-        console.print(f"[bold blue]BIOSPHIR CLI v{version('biosphir-cli')}[/]")
+        console.print(f"[bold blue]Bicdop v{version('bicdop')}[/]")
         console.print("Internal Developer Toolkit")
         if sys.stdin.isatty():
             console.print("Type --help for commands or --exit to leave.")
             interactive_shell()
         else:
-            console.print("Run biosphir --help for all commands.")
+            console.print("Run bicdop --help for all commands.")
 
 
 shortcut_cancel = threading.Event()
@@ -252,7 +259,7 @@ def interactive_shell() -> None:
     while True:
         try:
             project = f"[{selected_project}]" if selected_project else ""
-            prompt = f"biosphir{project} {Path.cwd()}> "
+            prompt = f"bicdop{project} {Path.cwd()}> "
             line = input(prompt).strip()
         except EOFError:
             typer.echo()
@@ -288,7 +295,7 @@ def interactive_shell() -> None:
                 error_console.print(Text(f"Could not change directory: {exc}", style="red"))
             continue
         if args == ["--update"]:
-            typer.echo("Type --exit, then run biosphir --update from your terminal.")
+            typer.echo("Type --exit, then run bicdop --update from your terminal.")
             continue
         if args and args[0] == "--run" and "--help" not in args[1:]:
             operands = [arg for arg in args[1:] if arg not in {"--background", "--wait"}]
@@ -300,7 +307,7 @@ def interactive_shell() -> None:
         if args:
             try:
                 if args[0] == "--run":
-                    app(args=[*args, "--interactive-session"], prog_name="biosphir", standalone_mode=False)
+                    app(args=[*args, "--interactive-session"], prog_name="bicdop", standalone_mode=False)
                 else:
                     subprocess.run([sys.executable, "-m", "biosphir_cli", *args], check=False)
             except _click.ClickException as exc:
@@ -311,7 +318,7 @@ def interactive_shell() -> None:
 
 @app.command("--help", context_settings={"help_option_names": ["--help"]})
 def help(ctx: typer.Context) -> None:
-    """Show all BIOSPHIR commands."""
+    """Show all Bicdop commands."""
     typer.echo(ctx.find_root().get_help())
 
 
@@ -321,7 +328,7 @@ def unmarked_workspace_folders() -> list[Path]:
         return []
     return [
         folder for folder in sorted(workspace.iterdir())
-        if folder.is_dir() and not (folder / ".biosphir").is_file()
+        if folder.is_dir() and not (project_marker(folder)).is_file()
     ]
 
 
@@ -356,8 +363,8 @@ def folder_size(folder: Path) -> str:
 
 @app.command("--cd", context_settings={"help_option_names": ["--help"]})
 def change_directory(folder: Annotated[Path, typer.Argument(help="Target folder.")]) -> None:
-    """Change the working directory at the interactive BIOSPHIR prompt."""
-    fail("Use --cd inside interactive BIOSPHIR, or cd directly in your terminal.")
+    """Change the working directory at the interactive Bicdop prompt."""
+    fail("Use --cd inside interactive Bicdop, or cd directly in your terminal.")
 
 
 @app.command("--mkdir", context_settings={"help_option_names": ["--help"]})
@@ -396,14 +403,14 @@ def projects(
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
 ) -> None:
-    """List folders containing a .biosphir marker."""
+    """List folders containing a .bic or .biosphir marker."""
     for folder in unmarked_workspace_folders():
         error_console.print(
             Text(f"Warning: Workspace folder has no .biosphir file: {folder}", style="yellow")
         )
     folders = find_marked_folders(roots)
     if not folders:
-        typer.echo("No .biosphir projects found.")
+        typer.echo("No .bic or .biosphir projects found.")
         return
 
     table = Table("Project ID", "Name", "Local repo", "Local status")
@@ -412,7 +419,7 @@ def projects(
     workspace = workspace_path().resolve()
     for folder in folders:
         try:
-            metadata = read_marker(folder / ".biosphir")
+            metadata = read_marker(project_marker(folder))
         except (OSError, ValueError):
             metadata = {}
         project_id = marker_field(metadata, "id")
@@ -462,7 +469,7 @@ def open_project(project: str) -> None:
     else:
         entry = discover_projects().get(project.lower())
         if entry is None:
-            fail(f"Unknown project {project!r}. Run biosphir --projects for IDs.")
+            fail(f"Unknown project {project!r}. Run bicdop --projects for IDs.")
         path = project_path(entry).absolute()
     if not path.is_dir():
         fail(f"Project folder missing: {path}")
@@ -477,8 +484,8 @@ def open_project(project: str) -> None:
 
 
 def marker_path(marker: str, folder: Path) -> Path:
-    if marker != ".biosphir":
-        fail("Use .biosphir as the marker filename.")
+    if marker not in (".bic", ".biosphir"):
+        fail("Use .bic or .biosphir as the marker filename.")
     folder = folder.expanduser().absolute()
     if not folder.is_dir():
         fail(f"Target folder does not exist or is not a directory: {folder}")
@@ -499,7 +506,7 @@ def marker_defaults(folder: Path) -> dict:
 
 @app.command("--plant", context_settings={"help_option_names": ["--help"]})
 def plant(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    marker: Annotated[str, typer.Argument(help="Marker filename (.bic or .biosphir).")],
     folder: Annotated[
         str | None, typer.Argument(help="Folder path or BIOSPHIR_WORKSPACE for bulk planting.")
     ] = None,
@@ -513,7 +520,7 @@ def plant(
         bool, typer.Option("--no-confirm", help="Skip confirmation when planting across the workspace.")
     ] = False,
 ) -> None:
-    """Create a .biosphir marker in a folder or across the workspace."""
+    """Create a .bic or legacy .biosphir marker."""
     if folder is not None and to is not None:
         fail("Provide the first folder either as an argument or with --to.")
     folders = [to or folder or ".", *(additional_folders or [])]
@@ -552,7 +559,7 @@ def plant_workspace(marker: str, no_confirm: bool) -> None:
 
     for folder in folders:
         typer.echo(str(folder))
-    if not no_confirm and not typer.confirm("Create .biosphir in these folders?"):
+    if not no_confirm and not typer.confirm("Create project markers in these folders?"):
         typer.echo("Cancelled.")
         return
 
@@ -570,7 +577,7 @@ def matching_project_markers(project_id: str) -> list[Path]:
     key = project_id.strip().lower()
     matches = []
     for folder in find_marked_folders(None):
-        marker = folder / ".biosphir"
+        marker = project_marker(folder)
         try:
             metadata = read_marker(marker)
         except (OSError, ValueError):
@@ -720,7 +727,7 @@ def run_project(
         except (OSError, ValueError) as exc:
             fail(f"Could not read entrypoint: {exc}")
         if not entrypoint:
-            fail("No Python entrypoint configured. Specify a .py file or set entrypoint in .biosphir.")
+            fail("No Python entrypoint configured. Specify a .py file or set entrypoint in the project marker.")
         script = Path(entrypoint)
     target = (folder / script).resolve()
     if not target.is_relative_to(folder) or target.suffix.lower() != ".py" or not target.is_file():
@@ -784,7 +791,7 @@ def rename_project(
     else:
         metadata_key = "name"
         for folder in find_marked_folders(None):
-            other_marker = folder / ".biosphir"
+            other_marker = project_marker(folder)
             if other_marker == marker:
                 continue
             try:
@@ -841,17 +848,17 @@ def delete(
         return
     if not targets:
         fail("Provide project IDs, .biosphir, or --folder PATH.")
-    if targets[0] == ".biosphir":
+    if targets[0] in (".bic", ".biosphir"):
         if len(targets) > 2:
             fail("Provide at most one folder path after .biosphir.")
         folders = [Path(item) for item in [*targets[1:], *(additional_targets or [])]]
         folders = list(dict.fromkeys(folder.expanduser().resolve() for folder in folders or [Path(".")]))
         for folder in folders:
-            target = marker_path(".biosphir", folder)
+            target = marker_path(targets[0], folder)
             if not target.is_file():
                 fail(f"Marker file not found: {target}")
         for folder in folders:
-            delete_marker(folder)
+            delete_marker(folder, targets[0])
         return
     delete_projects([*targets, *(additional_targets or [])], no_confirm)
 
@@ -877,7 +884,7 @@ def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
     }
     for folder in find_marked_folders(None):
         try:
-            key = marker_field(read_marker(folder / ".biosphir"), "id").lower()
+            key = marker_field(read_marker(project_marker(folder)), "id").lower()
         except (OSError, ValueError):
             continue
         if key and key in matches:
@@ -908,7 +915,7 @@ def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
     for key, folder in targets:
         try:
             if folder.resolve() != folder or marker_field(
-                read_marker(folder / ".biosphir"), "id"
+                read_marker(project_marker(folder)), "id"
             ).lower() != key:
                 fail(f"Project changed since discovery: {folder}")
             shutil.rmtree(folder, onerror=retry_readonly_file_delete)
@@ -923,7 +930,7 @@ def clone_marker_updates(source: Path) -> dict[Path, dict]:
     source_metadata = {}
     for folder in sorted(set(find_marked_folders(None)) | set(source_folders)):
         try:
-            metadata = read_marker(folder / ".biosphir")
+            metadata = read_marker(project_marker(folder))
         except (OSError, ValueError):
             continue
         project_id = marker_field(metadata, "id").lower()
@@ -942,7 +949,7 @@ def clone_marker_updates(source: Path) -> dict[Path, dict]:
             clone_id = f"{base_id}-{number}"
             number += 1
         used_ids.add(clone_id)
-        updates[folder.relative_to(source) / ".biosphir"] = {**metadata, "id": clone_id}
+        updates[folder.relative_to(source) / project_marker(folder).name] = {**metadata, "id": clone_id}
     return updates
 
 
@@ -1070,7 +1077,7 @@ def collect_workspace(
         return
 
     for source, target in plan:
-        if not (source / ".biosphir").is_file() or os.path.lexists(target):
+        if not project_marker(source).is_file() or os.path.lexists(target):
             fail(f"Source marker or destination changed: {source} -> {target}")
         try:
             source.rename(target)
@@ -1081,13 +1088,13 @@ def collect_workspace(
 
 @app.command("--fix", context_settings={"help_option_names": ["--help"]})
 def fix(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    marker: Annotated[str, typer.Argument(help="Marker filename (.bic or .biosphir).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
 ) -> None:
     """Repair an existing .biosphir marker."""
     target = marker_path(marker, folder)
     if not target.is_file():
-        fail(f"Marker file not found: {target}. Use biosphir --plant .biosphir to create it.")
+        fail(f"Marker file not found: {target}. Use bicdop --plant .biosphir to create it.")
     if target.is_symlink():
         fail(f"Cannot repair a symbolic link: {target}")
 
@@ -1120,7 +1127,7 @@ def fix(
 
 @app.command("--check", context_settings={"help_option_names": ["--help"]})
 def check(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.biosphir).")],
+    marker: Annotated[str, typer.Argument(help="Marker filename (.bic or .biosphir).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
 ) -> None:
     """Check whether a folder contains a .biosphir file."""
@@ -1130,8 +1137,8 @@ def check(
     console.print(Text(f"Found {target}"))
 
 
-def delete_marker(folder: Path) -> None:
-    target = marker_path(".biosphir", folder)
+def delete_marker(folder: Path, marker: str = ".biosphir") -> None:
+    target = marker_path(marker, folder)
     if not target.is_file():
         fail(f"Marker file not found: {target}")
     try:
@@ -1161,9 +1168,9 @@ def find_marked_folders(roots: list[Path] | None) -> list[Path]:
                 and not (folder / name).is_symlink()
                 and (folder / name).resolve().parent == folder
             ]
-            if not any(os.path.normcase(name) == ".biosphir" for name in files):
+            if not any(os.path.normcase(name) in (".bic", ".biosphir") for name in files):
                 continue
-            if (folder / ".biosphir").is_file():
+            if project_marker(folder).is_file():
                 matches.add(folder)
 
     return sorted(matches)
@@ -1171,7 +1178,7 @@ def find_marked_folders(roots: list[Path] | None) -> list[Path]:
 
 @app.command("--show", context_settings={"help_option_names": ["--help"]})
 def show(
-    marker: Annotated[str | None, typer.Argument(help="Optional .biosphir marker search.")] = None,
+    marker: Annotated[str | None, typer.Argument(help="Optional .bic or .biosphir marker search.")] = None,
     roots: Annotated[
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
@@ -1180,11 +1187,11 @@ def show(
     if marker is None:
         show_current_folders()
         return
-    if marker != ".biosphir":
-        fail("Use .biosphir as the marker filename.")
+    if marker not in (".bic", ".biosphir"):
+        fail("Use .bic or .biosphir as the marker filename.")
     folders = find_marked_folders(roots)
     if not folders:
-        typer.echo("No .biosphir projects found.")
+        typer.echo("No .bic or .biosphir projects found.")
         return
     table = Table("Folder")
     table.add_column("Path", overflow="fold")
@@ -1202,7 +1209,7 @@ def discover(
     """Find marked projects recursively and flag duplicate IDs."""
     matches: dict[Path, tuple[str, str]] = {}
     for folder in find_marked_folders(roots):
-        marker = folder / ".biosphir"
+        marker = project_marker(folder)
         try:
             project_id = marker_field(read_marker(marker), "id")
             if not project_id:
@@ -1214,7 +1221,7 @@ def discover(
 
 
     if not matches:
-        typer.echo("No .biosphir projects found.")
+        typer.echo("No .bic or .biosphir projects found.")
         return
     counts = Counter(project_id for project_id, _ in matches.values() if project_id)
     table = Table("Project ID", "Folder", "Status")
@@ -1246,6 +1253,12 @@ def doctor() -> None:
 @app.command("--info", context_settings={"help_option_names": ["--help"]})
 def info() -> None:
     """Show the CLI version and configuration paths."""
-    console.print(Text(f"BIOSPHIR CLI v{version('biosphir-cli')}"))
+    console.print(Text(f"Bicdop v{version('bicdop')}"))
     console.print(Text(f"Workspace: {workspace_path()}"))
     console.print(Text(f"Registry: {registry_path()}"))
+
+
+def legacy_main() -> None:
+    """Keep the original executable available during the transition."""
+    typer.echo("Warning: biosphir is deprecated; use bicdop instead.", err=True)
+    app(prog_name="biosphir")
