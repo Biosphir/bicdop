@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Added a startup header to the interactive prompt.
+
 ## 0.3.2
 
 - Open Bicdop without arguments to clear the screen and enter its interactive prompt.

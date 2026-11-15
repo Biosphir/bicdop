@@ -26,7 +26,10 @@ def interactive(prog_name: str) -> None:
             os.system("cls")
         else:
             print("\x1b[2J\x1b[H", end="", flush=True)
+    print(f"Bicdop v{version('bicdop')} by BIOSPHIR")
+    print("You are now in the Bicdop interactive interface.")
     print("Type --help for commands or exit to leave Bicdop.")
+    print()
     while True:
         try:
             line = input(f"bicdop [{Path.cwd()}]> ").strip()
