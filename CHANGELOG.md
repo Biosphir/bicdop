@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.7
+
+- Bumped the package version for the next release.
+
 ## 0.3.6
 
 - Connect GitHub through browser sign-in and push or fast-forward pull from the bound local checkout.
