@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added `bicdop --version` to display the installed package version.
+
 - Reset the CLI to its entry point and built-in usage help so commands can be added individually.
 
 - Rebranded BIOSPHIR CLI as Bicdop and introduced the `bicdop` executable.
