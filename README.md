@@ -16,7 +16,7 @@ py -3.12 -m venv .venv
 
 Run `bicdop` to clear the screen and open the interactive prompt. Type `--help`
 there to display usage, or `exit` to leave. The header shows the active
-workspace. Scroll command history with PgUp and PgDn.
+workspace. Scroll command history with the mouse wheel over the output panel or with PgUp and PgDn.
 
 Inside the Bicdop prompt, run `--update` to check the latest stable GitHub Release and install it
 with pip in the current Python environment. Installations made with `--user`
@@ -132,3 +132,26 @@ Separate multiple folders with commas. Use the full quoted path when a name is a
 --collect "C:\Downloads\Project One" --copy
 --delete "Folder One", "Folder Two" --no-confirm
 ```
+
+## Connect a GitHub repository
+
+Install Git and the [GitHub CLI](https://cli.github.com/) and make them
+available on PATH. Open Bicdop from a local Git checkout, or navigate there
+with `--cd`. Run the following in Bicdop:
+
+```text
+--set-github "https://github.com/OWNER/REPO"
+--push
+--pull
+```
+
+If GitHub CLI is signed out, Bicdop starts its browser login. You can also
+run `--set-github` without a URL to sign in first. Bicdop verifies repository
+access and saves the URL and local checkout path in `github.json` alongside
+workspace settings. GitHub CLI manages credentials.
+
+Push sends existing commits from the current branch to the branch of the
+same name. Pull requires a clean checkout and accepts only fast-forward
+updates from that branch. Both commands require the connected checkout,
+which prevents running them from another repository by accident. If you
+move the checkout, run `--set-github` again from its new location.

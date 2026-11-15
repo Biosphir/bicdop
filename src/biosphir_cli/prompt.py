@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Callable
 
 from prompt_toolkit.application import Application, run_in_terminal
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
+from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, ScrollbarMargin, Window
 from prompt_toolkit.widgets import TextArea
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.styles import Style
@@ -57,7 +58,12 @@ def show_interface(header: Callable[[], str], execute: Callable[[list[str]], boo
     busy = False
     bindings = KeyBindings()
     output = Window(
-        FormattedTextControl(lambda: ANSI("\n".join(history))),
+        FormattedTextControl(
+            lambda: ANSI("\n".join(history)),
+            # Keep the hidden cursor in the viewport so redraws preserve scrolling.
+            get_cursor_position=lambda: Point(x=0, y=min(output.vertical_scroll, max(0, len(history) - 1))),
+        ),
+        right_margins=[ScrollbarMargin(display_arrows=True)],
         wrap_lines=False,
         always_hide_cursor=True,
     )
@@ -93,7 +99,7 @@ def show_interface(header: Callable[[], str], execute: Callable[[list[str]], boo
                 history.append(str(exc))
                 return
             # Confirmation input and the updater can use the normal console.
-            visible = any(option in arguments for option in ("--delete", "--collect", "--update"))
+            visible = any(option in arguments for option in ("--delete", "--collect", "--update", "--set-github", "--push", "--pull"))
             result = await run_in_terminal(lambda: invoke(arguments, True)) if visible else invoke(arguments, False)
             if result:
                 application.exit()
@@ -131,7 +137,7 @@ def show_interface(header: Callable[[], str], execute: Callable[[list[str]], boo
         accept_handler=accept,
     )
     layout = HSplit([
-        Window(FormattedTextControl(header), height=4, wrap_lines=False, style="class:header"),
+        Window(FormattedTextControl(header), height=5, wrap_lines=False, style="class:header"),
         output,
         field,
     ])

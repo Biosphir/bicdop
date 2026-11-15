@@ -7,6 +7,7 @@ from importlib.metadata import version
 from subprocess import CalledProcessError
 
 from .prompt import show_interface
+from .github import active_repository, connect_repository, transfer
 from .help_view import show_help
 from .folders import change_folder, collect_folders, delete_folders, direct_child, make_folder, one_folder, rename_folder
 from .updater import update
@@ -29,10 +30,16 @@ def interactive(prog_name: str) -> None:
             workspace = f"{active[0]} ({active[1]})" if active else "none"
         except (OSError, ValueError):
             workspace = "unavailable"
+        try:
+            repository = active_repository()
+            github = repository[0] if repository else "unset"
+        except (OSError, ValueError):
+            github = "unavailable"
         return (
             f"{title}\n"
             "You are in the Bicdop interactive interface.\n"
             f"Active workspace: {workspace}\n"
+            f"Active github repo: {github}\n"
             "--help for commands | PgUp/PgDn to scroll | exit to leave"
         )
 
@@ -49,6 +56,9 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("-h", "--help", action="store_true")
     actions.add_argument("--update", action="store_true", help="Install the latest stable GitHub release.")
+    actions.add_argument("--set-github", nargs="?", const="", metavar="URL", help="Sign in to GitHub or connect a repository.")
+    actions.add_argument("--push", action="store_true", help="Push committed changes from the current branch.")
+    actions.add_argument("--pull", action="store_true", help="Fast-forward the current branch from GitHub.")
     actions.add_argument("--version", action="store_true", help="Show the installed Bicdop version.")
     actions.add_argument(
         "--set-workspace", nargs="*", metavar="FOLDER",
@@ -91,7 +101,7 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
     if args.to is not None:
         if args.set_name is None or any((
             args.set_workspace is not None, args.set_name_workspace is not None, args.select is not None, args.show, args.find is not None, args.collect is not None,
-            args.version, args.update, args.plant is not None, args.cd is not None,
+            args.version, args.update, args.set_github is not None, args.push, args.pull, args.plant is not None, args.cd is not None,
             args.cd_back, args.mkdir is not None, args.delete is not None,
         )):
             parser.error("Use --set-name [FOLDER_NAME] -to NEW_NAME on its own.")
@@ -174,6 +184,15 @@ def run_command(prog_name: str, argv: list[str]) -> bool | None:
             else:
                 label = f"{name} (missing .bicdop)"
                 print(f"\x1b[33m{label}\x1b[0m" if sys.stdout.isatty() else label)
+        return
+    if args.set_github is not None or args.push or args.pull:
+        try:
+            if args.set_github is not None:
+                connect_repository(args.set_github or None)
+            else:
+                transfer("push" if args.push else "pull")
+        except (OSError, ValueError, CalledProcessError) as exc:
+            parser.exit(1, f"GitHub command failed: {exc}\n")
         return
     if args.version:
         print(f"Bicdop v{version('bicdop')}")

@@ -24,6 +24,11 @@ SECTIONS = (
         ("--find .bicdop", "Find marked folders. Yellow marks folders outside the active workspace."),
         ("--collect [folder, ...] [--copy]", "Move marked folders into the workspace, or copy them with --copy."),
     )),
+    ("GitHub", (
+        ('--set-github ["repo URL"]', "Sign in through GitHub CLI, or connect a GitHub repo to this checkout."),
+        ("--push", "Push commits from the current branch to its matching GitHub branch."),
+        ("--pull", "Fast-forward the current branch from GitHub. Requires a clean working tree."),
+    )),
     ("Bicdop", (
         ("--help / -h", "Show this command reference."),
         ("--version", "Show the installed version."),

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.6
+
+- Connect GitHub through browser sign-in and push or fast-forward pull from the bound local checkout.
+
+- Fix command history scrolling and show a scrollbar.
+
 ## 0.3.5
 
 - Pin the Bicdop header and active workspace above a scrollable command history.
