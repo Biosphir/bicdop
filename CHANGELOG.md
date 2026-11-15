@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- Pin the Bicdop header and active workspace above a scrollable command history.
+
 ## 0.3.4
 
 - Added --set-name-workspace to rename the active workspace.

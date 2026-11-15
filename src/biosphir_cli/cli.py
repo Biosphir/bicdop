@@ -1,13 +1,12 @@
 """Bicdop command-line entry point."""
 
-import os
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
 from importlib.metadata import version
 from subprocess import CalledProcessError
 
-from .prompt import command_tokens, prompt_session
+from .prompt import show_interface
 from .help_view import show_help
 from .folders import change_folder, collect_folders, delete_folders, direct_child, make_folder, one_folder, rename_folder
 from .updater import update
@@ -22,37 +21,22 @@ def app(prog_name: str = "bicdop") -> None:
 
 
 def interactive(prog_name: str) -> None:
-    if sys.stdout.isatty():
-        if os.name == "nt":
-            os.system("cls")
-        else:
-            print("\x1b[2J\x1b[H", end="", flush=True)
-    print(f"Bicdop v{version('bicdop')} by BIOSPHIR")
-    print("You are now in the Bicdop interactive interface.")
-    print("Type --help for commands or exit to leave Bicdop.")
-    print()
-    session = prompt_session()
-    while True:
+    title = f"Bicdop v{version('bicdop')} by BIOSPHIR"
+
+    def header() -> str:
         try:
-            try:
-                active = active_workspace_details()
-                workspace = f"{active[0]} ({active[1]})" if active else "none"
-            except (OSError, ValueError):
-                workspace = "unavailable"
-            line = session.prompt(f"bicdop [workspace: {workspace}] [{Path.cwd()}]> ").strip()
-            if line.lower() in {"exit", "quit"}:
-                return
-            if line:
-                if run_command(prog_name, command_tokens(line)):
-                    return
-        except EOFError:
-            return
-        except KeyboardInterrupt:
-            print()
-        except SystemExit:
-            continue
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
+            active = active_workspace_details()
+            workspace = f"{active[0]} ({active[1]})" if active else "none"
+        except (OSError, ValueError):
+            workspace = "unavailable"
+        return (
+            f"{title}\n"
+            "You are in the Bicdop interactive interface.\n"
+            f"Active workspace: {workspace}\n"
+            "--help for commands | PgUp/PgDn to scroll | exit to leave"
+        )
+
+    show_interface(header, lambda arguments: run_command(prog_name, arguments))
 
 
 def run_command(prog_name: str, argv: list[str]) -> bool | None:

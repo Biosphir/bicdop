@@ -15,7 +15,8 @@ py -3.12 -m venv .venv
 ```
 
 Run `bicdop` to clear the screen and open the interactive prompt. Type `--help`
-there to display usage, or `exit` to leave.
+there to display usage, or `exit` to leave. The header shows the active
+workspace. Scroll command history with PgUp and PgDn.
 
 Inside the Bicdop prompt, run `--update` to check the latest stable GitHub Release and install it
 with pip in the current Python environment. Installations made with `--user`
