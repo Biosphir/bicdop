@@ -15,7 +15,6 @@ test = ["pytest>=8,<10"]
 
 [project.scripts]
 bicdop = "biosphir_cli.cli:app"
-biosphir = "biosphir_cli.cli:legacy_main"
 
 [tool.setuptools.package-data]
 biosphir_cli = ["projects.json"]

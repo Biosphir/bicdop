@@ -11,13 +11,13 @@ An internal developer toolkit for Windows, built with Python, Typer, and Rich.
 ## Command syntax
 
 Use `bicdop --action [target] [path]`. For example, run
-`bicdop --clone BIOSPHIR_WORKSPACE` or `bicdop --plant .bic`.
+`bicdop --clone BICDOP_WORKSPACE` or `bicdop --plant .bic`.
 Use `bicdop --projects` to list projects and `bicdop --help` to see all actions.
 
 ## Interactive mode
 
 Run `bicdop` in CMD or PowerShell to open the `bicdop>` prompt. Type commands
-such as `--projects`, `--help`, or `--check .biosphir "D:\My Projects\Demo"`.
+such as `--projects`, `--help`, or `--check .bic "D:\My Projects\Demo"`.
 Type `--exit` or `--quit` to return to your terminal. Commands such as
 `bicdop --projects` also work directly from CMD or PowerShell.
 
@@ -49,7 +49,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | Command | What it does |
 | --- | --- |
 | `bicdop` | Start interactive mode in a terminal |
-| `bicdop --projects` | List folders with a .bic or .biosphir marker |
+| `bicdop --projects` | List folders with a .bic marker |
 | `bicdop --open notcher` | Open the Notcher folder in File Explorer |
 | `bicdop --doctor` | Check Python, Git, VS Code, workspace, and registry |
 | `bicdop --version` | Show the installed CLI version |
@@ -98,7 +98,7 @@ name as its ID. For a stable ID and custom display name, use JSON:
 {"id": "my-project", "name": "My Project"}
 ```
 
-The `--projects` command lists folders with a `.bic` or legacy `.biosphir` marker. It uses
+The `--projects` command lists folders with a `.bic` marker. It uses
 the same recursive search and repeatable `--root` option as `discover` and
 marks entries without a readable ID as `Review`. It warns about immediate
 workspace subfolders that lack a marker. Commit the marker to share
@@ -121,18 +121,18 @@ all folders in place.
 Navigate to the folder you want as your workspace and run:
 
 ```powershell
-bicdop --set BIOSPHIR_WORKSPACE
+bicdop --set BICDOP_WORKSPACE
 bicdop --info
 ```
 
-The CLI saves the folder for future sessions. A `BIOSPHIR_WORKSPACE`
+The CLI saves the folder for future sessions. A `BICDOP_WORKSPACE`
 environment variable takes precedence over the saved setting.
 
 ## Project registry
 
-The bundled registry includes Notcher, Macro Pad Z1, Gwen, and the BIOSPHIR Website. Relative project paths resolve under `~/Documents/GitHub` by default. Set `$env:BIOSPHIR_WORKSPACE = 'D:\Projects'` to use another workspace in the current shell.
+The bundled registry includes Notcher, Macro Pad Z1, Gwen, and the BIOSPHIR Website. Relative project paths resolve under `~/Documents/GitHub` by default. Set `$env:BICDOP_WORKSPACE = 'D:\Projects'` to use another workspace in the current shell.
 
-To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) and set `$env:BIOSPHIR_REGISTRY` to the copy's path. Each lowercase project ID maps to an object with a `name` and a `path`. Paths can also be absolute. Run `bicdop --info` to see the active paths. `doctor` exits with status 1 when a required check fails.
+To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) and set `$env:BICDOP_REGISTRY` to the copy's path. Each lowercase project ID maps to an object with a `name` and a `path`. Paths can also be absolute. Run `bicdop --info` to see the active paths. `doctor` exits with status 1 when a required check fails.
 
 ## Run tests
 
@@ -143,8 +143,8 @@ To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) 
 
 
 To mark all unmarked folders directly under the workspace, run
-`bicdop --plant .bic BIOSPHIR_WORKSPACE` and confirm the listed folders.
-Use `bicdop --plant .bic BIOSPHIR_WORKSPACE --no-confirm` to skip the prompt.
+`bicdop --plant .bic BICDOP_WORKSPACE` and confirm the listed folders.
+Use `bicdop --plant .bic BICDOP_WORKSPACE --no-confirm` to skip the prompt.
 
 
 Use `bicdop --collect` to preview and confirm moves into the workspace.
@@ -164,7 +164,7 @@ bicdop --rename "project-id" PROJECT_ID "new-project-id"
 bicdop --rename "project-id" PROJECT_NAME "New Project Name"
 ```
 
-The selected field is saved in `.biosphir`. IDs are stored in lowercase and
+The selected field is saved in `.bic`. IDs are stored in lowercase and
 must be unique across discovered projects. Display names must also be unique
 when renaming, ignoring letter case. The folder path stays the same.
 After changing the ID of the selected project, select it again using the new ID.
@@ -185,8 +185,8 @@ BIOSPHIR and checking `bicdop --version`.
 ## Clone a project or workspace
 
 ```powershell
-bicdop --clone BIOSPHIR_WORKSPACE
-bicdop --clone BIOSPHIR_WORKSPACE "D:\Backups\BIOSPHIR"
+bicdop --clone BICDOP_WORKSPACE
+bicdop --clone BICDOP_WORKSPACE "D:\Backups\BIOSPHIR"
 bicdop --clone "project-id"
 bicdop --clone "project-id" "D:\Backups\Project Copy"
 ```
@@ -226,18 +226,19 @@ Choose a location within the discovery roots to keep finding the project by ID.
 
 Project markers store `schema_version` and an optional project-relative
 Python `entrypoint`. Use `bicdop --run project-id` or `--run` after
-selecting a project in interactive mode. Use `--fix .biosphir` to fill missing fields.
+selecting a project in interactive mode. Use `--fix .bic` to fill missing fields.
 
 ## Compatibility and development
 
-The legacy `biosphir` command remains available and prints a deprecation notice. Existing `biosphir_cli` imports and `python -m biosphir_cli` remain supported. Gwen integrations using those entry points can continue working and should switch to `bicdop` when convenient.
 
-Existing `.biosphir` project markers, `BIOSPHIR_WORKSPACE`, `BIOSPHIR_REGISTRY`, and the `biosphir-cli/workspace.json` configuration path remain in use. No data migration is needed.
 
 For development, install dependencies with `python -m pip install -e ".[test]"` and run `python -m pytest`. The option-style commands documented above are the current command reference.
 
 ## Project markers
 
-New projects can use `.bic`, for example `bicdop --plant .bic`. Existing `.biosphir` markers remain supported without renaming. When both exist in one folder, Bicdop uses `.bic` for project discovery and operations. Explicit marker commands act on the filename supplied.
 
 When upgrading an existing installation, uninstall the old distribution first with `python -m pip uninstall biosphir-cli`, then install Bicdop in the same environment. This avoids two distributions owning the same Python package and executable.
+
+Bicdop discovers projects with a `.bic` marker. To migrate a project, rename its existing marker to `.bic` if that filename is available. Keep the JSON contents intact. Gwen launch configurations should invoke `bicdop`. Existing workspace settings are still read from the original configuration path, and legacy environment variables are accepted as fallbacks.
+
+For the registry and task runner, see [Configured projects](CONFIGURED_PROJECTS.md). The option-style commands above cover the existing workspace workflow.

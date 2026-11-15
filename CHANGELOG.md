@@ -3,5 +3,6 @@
 ## Unreleased
 
 - Rebranded BIOSPHIR CLI as Bicdop and introduced the `bicdop` executable.
-- Retained the `biosphir` executable with a deprecation notice, existing Python imports, configuration paths, environment variables, and project markers.
-- Added support for .bic project markers while continuing to recognize .biosphir markers.
+- Made `bicdop` the sole executable and `.bic` the sole project marker.
+
+- Added a local project registry, versioned task configuration, explicit execution consent, and runtime diagnostics.
