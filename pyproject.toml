@@ -8,13 +8,10 @@ version = "0.1.0"
 description = "Bicdop, BIOSPHIR Integrated Command & Development Operations Platform"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["typer>=0.16,<1", "rich>=13,<16", "tomli>=2,<3"]
+dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
 
 [project.scripts]
 bicdop = "biosphir_cli.cli:app"
-
-[tool.setuptools.package-data]
-biosphir_cli = ["projects.json"]
