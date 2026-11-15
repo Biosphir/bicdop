@@ -118,7 +118,7 @@ def discover_projects() -> dict[str, dict[str, str]]:
         return entries
 
     for folder in sorted(workspace.iterdir(), key=lambda path: path.name.lower()):
-        marker = folder / ".bic"
+        marker = folder / ".bicdop"
         if not folder.is_dir() or not marker.is_file():
             continue
         try:
@@ -324,7 +324,7 @@ def unmarked_workspace_folders() -> list[Path]:
         return []
     return [
         folder for folder in sorted(workspace.iterdir())
-        if folder.is_dir() and not (folder / ".bic").is_file()
+        if folder.is_dir() and not (folder / ".bicdop").is_file()
     ]
 
 
@@ -399,14 +399,14 @@ def projects(
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
 ) -> None:
-    """List folders containing a .bic marker."""
+    """List folders containing a .bicdop marker."""
     for folder in unmarked_workspace_folders():
         error_console.print(
-            Text(f"Warning: Workspace folder has no .bic file: {folder}", style="yellow")
+            Text(f"Warning: Workspace folder has no .bicdop file: {folder}", style="yellow")
         )
     folders = find_marked_folders(roots)
     if not folders:
-        typer.echo("No .bic projects found.")
+        typer.echo("No .bicdop projects found.")
         return
 
     table = Table("Project ID", "Name", "Local repo", "Local status")
@@ -415,7 +415,7 @@ def projects(
     workspace = workspace_path().resolve()
     for folder in folders:
         try:
-            metadata = read_marker(folder / ".bic")
+            metadata = read_marker(folder / ".bicdop")
         except (OSError, ValueError):
             metadata = {}
         project_id = marker_field(metadata, "id")
@@ -480,8 +480,8 @@ def open_project(project: str) -> None:
 
 
 def marker_path(marker: str, folder: Path) -> Path:
-    if marker != ".bic":
-        fail("Use .bic as the marker filename.")
+    if marker != ".bicdop":
+        fail("Use .bicdop as the marker filename.")
     folder = folder.expanduser().absolute()
     if not folder.is_dir():
         fail(f"Target folder does not exist or is not a directory: {folder}")
@@ -502,7 +502,7 @@ def marker_defaults(folder: Path) -> dict:
 
 @app.command("--plant", context_settings={"help_option_names": ["--help"]})
 def plant(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.bic).")],
+    marker: Annotated[str, typer.Argument(help="Marker filename (.bicdop).")],
     folder: Annotated[
         str | None, typer.Argument(help="Folder path or BICDOP_WORKSPACE for bulk planting.")
     ] = None,
@@ -516,7 +516,7 @@ def plant(
         bool, typer.Option("--no-confirm", help="Skip confirmation when planting across the workspace.")
     ] = False,
 ) -> None:
-    """Create a .bic marker."""
+    """Create a .bicdop marker."""
     if folder is not None and to is not None:
         fail("Provide the first folder either as an argument or with --to.")
     folders = [to or folder or ".", *(additional_folders or [])]
@@ -550,7 +550,7 @@ def plant_workspace(marker: str, no_confirm: bool) -> None:
     marker_path(marker, workspace)
     folders = unmarked_workspace_folders()
     if not folders:
-        typer.echo("All workspace folders already have .bic.")
+        typer.echo("All workspace folders already have .bicdop.")
         return
 
     for folder in folders:
@@ -573,7 +573,7 @@ def matching_project_markers(project_id: str) -> list[Path]:
     key = project_id.strip().lower()
     matches = []
     for folder in find_marked_folders(None):
-        marker = folder / ".bic"
+        marker = folder / ".bicdop"
         try:
             metadata = read_marker(marker)
         except (OSError, ValueError):
@@ -787,7 +787,7 @@ def rename_project(
     else:
         metadata_key = "name"
         for folder in find_marked_folders(None):
-            other_marker = folder / ".bic"
+            other_marker = folder / ".bicdop"
             if other_marker == marker:
                 continue
             try:
@@ -811,7 +811,7 @@ def rename_project(
 @app.command("--delete", context_settings={"help_option_names": ["--help"]})
 def delete(
     targets: Annotated[
-        list[str] | None, typer.Argument(help="Project IDs, or .bic followed by an optional folder path.")
+        list[str] | None, typer.Argument(help="Project IDs, or .bicdop followed by an optional folder path.")
     ] = None,
     folder: Annotated[Path | None, typer.Option("--folder", help="Folder path to delete.")] = None,
     additional_targets: Annotated[
@@ -821,7 +821,7 @@ def delete(
         bool, typer.Option("--no-confirm", help="Delete project folders without prompting.")
     ] = False,
 ) -> None:
-    """Delete project folders permanently or remove a .bic marker."""
+    """Delete project folders permanently or remove a .bicdop marker."""
     if folder is not None:
         if targets or additional_targets:
             fail("Use --folder with a single folder path.")
@@ -843,10 +843,10 @@ def delete(
         typer.echo(f"Deleted {path}")
         return
     if not targets:
-        fail("Provide project IDs, .bic, or --folder PATH.")
-    if targets[0] == ".bic":
+        fail("Provide project IDs, .bicdop, or --folder PATH.")
+    if targets[0] == ".bicdop":
         if len(targets) > 2:
-            fail("Provide at most one folder path after .bic.")
+            fail("Provide at most one folder path after .bicdop.")
         folders = [Path(item) for item in [*targets[1:], *(additional_targets or [])]]
         folders = list(dict.fromkeys(folder.expanduser().resolve() for folder in folders or [Path(".")]))
         for folder in folders:
@@ -880,7 +880,7 @@ def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
     }
     for folder in find_marked_folders(None):
         try:
-            key = marker_field(read_marker(folder / ".bic"), "id").lower()
+            key = marker_field(read_marker(folder / ".bicdop"), "id").lower()
         except (OSError, ValueError):
             continue
         if key and key in matches:
@@ -911,7 +911,7 @@ def delete_projects(project_ids: list[str], no_confirm: bool) -> None:
     for key, folder in targets:
         try:
             if folder.resolve() != folder or marker_field(
-                read_marker(folder / ".bic"), "id"
+                read_marker(folder / ".bicdop"), "id"
             ).lower() != key:
                 fail(f"Project changed since discovery: {folder}")
             shutil.rmtree(folder, onerror=retry_readonly_file_delete)
@@ -926,7 +926,7 @@ def clone_marker_updates(source: Path) -> dict[Path, dict]:
     source_metadata = {}
     for folder in sorted(set(find_marked_folders(None)) | set(source_folders)):
         try:
-            metadata = read_marker(folder / ".bic")
+            metadata = read_marker(folder / ".bicdop")
         except (OSError, ValueError):
             continue
         project_id = marker_field(metadata, "id").lower()
@@ -945,7 +945,7 @@ def clone_marker_updates(source: Path) -> dict[Path, dict]:
             clone_id = f"{base_id}-{number}"
             number += 1
         used_ids.add(clone_id)
-        updates[folder.relative_to(source) / ".bic"] = {**metadata, "id": clone_id}
+        updates[folder.relative_to(source) / ".bicdop"] = {**metadata, "id": clone_id}
     return updates
 
 
@@ -1022,7 +1022,7 @@ def copy_project(source: Path, target: Path) -> None:
                 progress.advance(task)
                 return result
 
-            with TemporaryDirectory(prefix=".bic-clone-", dir=target.parent) as directory:
+            with TemporaryDirectory(prefix=".bicdop-clone-", dir=target.parent) as directory:
                 staged = Path(directory) / "copy"
                 shutil.copytree(source, staged, symlinks=True, copy_function=copy_file)
                 for marker, metadata in updates.items():
@@ -1073,7 +1073,7 @@ def collect_workspace(
         return
 
     for source, target in plan:
-        if not (source / ".bic").is_file() or os.path.lexists(target):
+        if not (source / ".bicdop").is_file() or os.path.lexists(target):
             fail(f"Source marker or destination changed: {source} -> {target}")
         try:
             source.rename(target)
@@ -1084,13 +1084,13 @@ def collect_workspace(
 
 @app.command("--fix", context_settings={"help_option_names": ["--help"]})
 def fix(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.bic).")],
+    marker: Annotated[str, typer.Argument(help="Marker filename (.bicdop).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
 ) -> None:
-    """Repair an existing .bic marker."""
+    """Repair an existing .bicdop marker."""
     target = marker_path(marker, folder)
     if not target.is_file():
-        fail(f"Marker file not found: {target}. Use bicdop --plant .bic to create it.")
+        fail(f"Marker file not found: {target}. Use bicdop --plant .bicdop to create it.")
     if target.is_symlink():
         fail(f"Cannot repair a symbolic link: {target}")
 
@@ -1123,17 +1123,17 @@ def fix(
 
 @app.command("--check", context_settings={"help_option_names": ["--help"]})
 def check(
-    marker: Annotated[str, typer.Argument(help="Marker filename (.bic).")],
+    marker: Annotated[str, typer.Argument(help="Marker filename (.bicdop).")],
     folder: Annotated[Path, typer.Argument(help="Target folder. Defaults to the current folder.")] = Path("."),
 ) -> None:
-    """Check whether a folder contains a .bic file."""
+    """Check whether a folder contains a .bicdop file."""
     target = marker_path(marker, folder)
     if not target.is_file():
         fail(f"Marker file not found: {target}")
     console.print(Text(f"Found {target}"))
 
 
-def delete_marker(folder: Path, marker: str = ".bic") -> None:
+def delete_marker(folder: Path, marker: str = ".bicdop") -> None:
     target = marker_path(marker, folder)
     if not target.is_file():
         fail(f"Marker file not found: {target}")
@@ -1164,9 +1164,9 @@ def find_marked_folders(roots: list[Path] | None) -> list[Path]:
                 and not (folder / name).is_symlink()
                 and (folder / name).resolve().parent == folder
             ]
-            if not any(os.path.normcase(name) == ".bic" for name in files):
+            if not any(os.path.normcase(name) == ".bicdop" for name in files):
                 continue
-            if (folder / ".bic").is_file():
+            if (folder / ".bicdop").is_file():
                 matches.add(folder)
 
     return sorted(matches)
@@ -1174,20 +1174,20 @@ def find_marked_folders(roots: list[Path] | None) -> list[Path]:
 
 @app.command("--show", context_settings={"help_option_names": ["--help"]})
 def show(
-    marker: Annotated[str | None, typer.Argument(help="Optional .bic marker search.")] = None,
+    marker: Annotated[str | None, typer.Argument(help="Optional .bicdop marker search.")] = None,
     roots: Annotated[
         list[Path] | None, typer.Option("--root", help="Search folder. Repeat for multiple folders.")
     ] = None,
 ) -> None:
-    """List current folders or search for .bic markers."""
+    """List current folders or search for .bicdop markers."""
     if marker is None:
         show_current_folders()
         return
-    if marker != ".bic":
-        fail("Use .bic as the marker filename.")
+    if marker != ".bicdop":
+        fail("Use .bicdop as the marker filename.")
     folders = find_marked_folders(roots)
     if not folders:
-        typer.echo("No .bic projects found.")
+        typer.echo("No .bicdop projects found.")
         return
     table = Table("Folder")
     table.add_column("Path", overflow="fold")
@@ -1205,7 +1205,7 @@ def discover(
     """Find marked projects recursively and flag duplicate IDs."""
     matches: dict[Path, tuple[str, str]] = {}
     for folder in find_marked_folders(roots):
-        marker = folder / ".bic"
+        marker = folder / ".bicdop"
         try:
             project_id = marker_field(read_marker(marker), "id")
             if not project_id:
@@ -1217,7 +1217,7 @@ def discover(
 
 
     if not matches:
-        typer.echo("No .bic projects found.")
+        typer.echo("No .bicdop projects found.")
         return
     counts = Counter(project_id for project_id, _ in matches.values() if project_id)
     table = Table("Project ID", "Folder", "Status")

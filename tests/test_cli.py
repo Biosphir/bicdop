@@ -37,12 +37,12 @@ def test_projects(workspace, monkeypatch):
     monkeypatch.setenv("COLUMNS", "200")
     folder = workspace / "group" / "marked"
     folder.mkdir(parents=True)
-    (folder / ".bic").write_text('{"id":"demo","name":"Demo project"}')
+    (folder / ".bicdop").write_text('{"id":"demo","name":"Demo project"}')
     result = runner.invoke(cli.app, ["--projects", "--root", str(workspace)])
     assert result.exit_code == 0
     assert "Notcher" not in result.stdout
     assert "Local repo" in result.stdout
-    assert "Workspace folder has no .bic file" in result.stderr
+    assert "Workspace folder has no .bicdop file" in result.stderr
     assert str(folder.parent) in result.stderr
     assert "Demo project" in result.stdout
     assert "Available" in result.stdout
@@ -89,7 +89,7 @@ def test_doctor(workspace, monkeypatch, editor):
 def test_discovery(workspace, monkeypatch):
     folder = workspace / "New Project"
     folder.mkdir()
-    marker = folder / ".bic"
+    marker = folder / ".bicdop"
     marker.touch()
     assert "Review" in runner.invoke(cli.app, ["--projects", "--root", str(workspace)]).stdout
 
@@ -106,7 +106,7 @@ def test_discovery(workspace, monkeypatch):
 def test_registered_folder_with_marker_is_listed_once(workspace):
     folder = workspace / "Notcher folder"
     folder.mkdir()
-    (folder / ".bic").touch()
+    (folder / ".bicdop").touch()
     result = runner.invoke(cli.app, ["--projects"])
     assert result.exit_code == 0
     assert result.stdout.count("Review") == 1
@@ -116,14 +116,14 @@ def test_registered_folder_with_marker_is_listed_once(workspace):
 def test_plant(tmp_path, monkeypatch, explicit_folder):
     folder = tmp_path / "Project folder"
     folder.mkdir()
-    args = ["--plant", ".bic"]
+    args = ["--plant", ".bicdop"]
     if explicit_folder:
         args.append(str(folder))
     else:
         monkeypatch.chdir(folder)
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
-    marker = folder / ".bic"
+    marker = folder / ".bicdop"
     assert json.loads(marker.read_text()) == {"schema_version": 1, "id": "project-folder", "name": "Project folder", "entrypoint": None}
 
     marker.write_text('{"name": "My Project"}', encoding="utf-8")
@@ -133,19 +133,19 @@ def test_plant(tmp_path, monkeypatch, explicit_folder):
 
 
 def test_plant_rejects_missing_folder(tmp_path):
-    result = runner.invoke(cli.app, ["--plant", ".bic", str(tmp_path / "missing")])
+    result = runner.invoke(cli.app, ["--plant", ".bicdop", str(tmp_path / "missing")])
     assert result.exit_code == 1
     assert "Target folder does not exist" in result.stderr
 
 
 @pytest.mark.parametrize("explicit_folder", [False, True])
 def test_check(tmp_path, monkeypatch, explicit_folder):
-    args = ["--check", ".bic"]
+    args = ["--check", ".bicdop"]
     if explicit_folder:
         args.append(str(tmp_path))
     else:
         monkeypatch.chdir(tmp_path)
-    marker = tmp_path / ".bic"
+    marker = tmp_path / ".bicdop"
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 1
     assert "Marker file not found" in result.stderr
@@ -159,13 +159,13 @@ def test_check(tmp_path, monkeypatch, explicit_folder):
 
 @pytest.mark.parametrize("explicit_folder", [False, True])
 def test_delete(tmp_path, monkeypatch, explicit_folder):
-    args = ["--delete", ".bic"]
+    args = ["--delete", ".bicdop"]
     if explicit_folder:
         args.append(str(tmp_path))
     else:
         monkeypatch.chdir(tmp_path)
 
-    marker = tmp_path / ".bic"
+    marker = tmp_path / ".bicdop"
     marker.touch()
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
@@ -180,11 +180,11 @@ def test_show(workspace, monkeypatch):
     monkeypatch.setenv("COLUMNS", "200")
     marked = workspace / "marked"
     marked.mkdir()
-    (marked / ".bic").touch()
+    (marked / ".bicdop").touch()
     nested = workspace / "outer" / "nested"
     nested.mkdir(parents=True)
-    (nested / ".bic").touch()
-    result = runner.invoke(cli.app, ["--show", ".bic", "--root", str(workspace)], terminal_width=200)
+    (nested / ".bicdop").touch()
+    result = runner.invoke(cli.app, ["--show", ".bicdop", "--root", str(workspace)], terminal_width=200)
     assert result.exit_code == 0
     assert "Folder" in result.stdout
     assert "Path" in result.stdout
@@ -196,7 +196,7 @@ def test_discover_reports_duplicates_and_review(tmp_path):
     for name, content in (("first", '{"id":"demo"}'), ("second", '{"id":"DEMO"}'), ("empty", "")):
         folder = tmp_path / "group" / name
         folder.mkdir(parents=True)
-        (folder / ".bic").write_text(content, encoding="utf-8")
+        (folder / ".bicdop").write_text(content, encoding="utf-8")
     result = runner.invoke(cli.app, ["--discover", "--root", str(tmp_path)], terminal_width=160)
     assert result.exit_code == 0
     assert result.stdout.count("Duplicate ID") == 2
@@ -207,9 +207,9 @@ def test_discover_reports_duplicates_and_review(tmp_path):
 def test_fix(tmp_path, content):
     folder = tmp_path / "Project Folder"
     folder.mkdir()
-    marker = folder / ".bic"
+    marker = folder / ".bicdop"
     marker.write_text(content, encoding="utf-8")
-    result = runner.invoke(cli.app, ["--fix", ".bic", str(folder)])
+    result = runner.invoke(cli.app, ["--fix", ".bicdop", str(folder)])
     assert result.exit_code == 0
     data = json.loads(marker.read_text(encoding="utf-8"))
     assert data["name"] == "Project Folder"
@@ -230,16 +230,16 @@ def test_projects_plant(workspace, options, answer, created):
     folder.mkdir()
     existing = workspace / "Existing"
     existing.mkdir()
-    (existing / ".bic").write_text('{"id":"keep"}')
+    (existing / ".bicdop").write_text('{"id":"keep"}')
     result = runner.invoke(
-        cli.app, ["--plant", ".bic", "BICDOP_WORKSPACE", *options], input=answer
+        cli.app, ["--plant", ".bicdop", "BICDOP_WORKSPACE", *options], input=answer
     )
     assert result.exit_code == 0
-    marker = folder / ".bic"
+    marker = folder / ".bicdop"
     assert marker.exists() == created
     if created:
         assert json.loads(marker.read_text())["id"] == "new-project"
-    assert (existing / ".bic").read_text() == '{"id":"keep"}'
+    assert (existing / ".bicdop").read_text() == '{"id":"keep"}'
 
 
 @pytest.mark.parametrize(("options", "answer", "moved"), [
@@ -250,15 +250,15 @@ def test_projects_plant(workspace, options, answer, created):
 def test_collect_workspace(workspace, monkeypatch, options, answer, moved):
     source = workspace.parent / f"{workspace.name}-external"
     source.mkdir()
-    (source / ".bic").touch()
+    (source / ".bicdop").touch()
     nested = source / "nested"
     nested.mkdir()
-    (nested / ".bic").touch()
+    (nested / ".bicdop").touch()
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [source, nested])
     result = runner.invoke(cli.app, ["--collect", *options], input=answer)
     assert result.exit_code == 0
     assert source.exists() != moved
-    assert (workspace / source.name / "nested" / ".bic").is_file() == moved
+    assert (workspace / source.name / "nested" / ".bicdop").is_file() == moved
 
 
 @pytest.mark.parametrize(("options", "answer", "deleted"), [
@@ -270,7 +270,7 @@ def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
     folders = [workspace / "first", workspace / "second"]
     for folder in folders:
         folder.mkdir()
-        (folder / ".bic").write_text(json.dumps({"id": folder.name}))
+        (folder / ".bicdop").write_text(json.dumps({"id": folder.name}))
         (folder / "content.txt").touch()
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: folders)
     result = runner.invoke(
@@ -289,12 +289,12 @@ def test_delete_projects(workspace, monkeypatch, options, answer, deleted):
 def test_rename_project(workspace, monkeypatch, field, value, expected_id, expected_name):
     folder = workspace / "original"
     folder.mkdir()
-    marker = folder / ".bic"
+    marker = folder / ".bicdop"
     original = {"id": "demo", "name": "Old name", "extra": True}
     marker.write_text(json.dumps(original))
     other = workspace / "other"
     other.mkdir()
-    (other / ".bic").write_text('{"id":"taken","name":"taken name"}')
+    (other / ".bicdop").write_text('{"id":"taken","name":"taken name"}')
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [folder, other])
 
     result = runner.invoke(cli.app, ["--rename", "DEMO", field, value])
@@ -326,15 +326,15 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     workspace = tmp_path / "workspace"
     project = workspace / "Demo"
     project.mkdir(parents=True)
-    (project / ".bic").write_text('{"id":"demo"}')
+    (project / ".bicdop").write_text('{"id":"demo"}')
     (project / "main.py").write_text("print('hello')")
     monkeypatch.setenv("BICDOP_WORKSPACE", str(workspace))
     existing = workspace / "existing"
     existing.mkdir()
-    (existing / ".bic").write_text('{"id":"DEMO-CLONE"}')
+    (existing / ".bicdop").write_text('{"id":"DEMO-CLONE"}')
     nested = project / "nested"
     nested.mkdir()
-    (nested / ".bic").write_text('{"id":"nested"}')
+    (nested / ".bicdop").write_text('{"id":"nested"}')
     monkeypatch.setattr(cli, "find_marked_folders", lambda roots: [
         folder for folder in (project, nested, existing)
         if roots is None or folder.is_relative_to(roots[0])
@@ -352,13 +352,13 @@ def test_clone_project(tmp_path, monkeypatch, whole_workspace, explicit):
     assert result.exit_code == 0, result.output
     copied = target / "Demo" if whole_workspace else target
     assert (copied / "main.py").read_text() == (project / "main.py").read_text()
-    assert json.loads((copied / ".bic").read_text())["id"] == "demo-clone-2"
-    assert json.loads((copied / "nested" / ".bic").read_text())["id"] == "nested-clone"
-    assert json.loads((project / ".bic").read_text())["id"] == "demo"
+    assert json.loads((copied / ".bicdop").read_text())["id"] == "demo-clone-2"
+    assert json.loads((copied / "nested" / ".bicdop").read_text())["id"] == "nested-clone"
+    assert json.loads((project / ".bicdop").read_text())["id"] == "demo"
     assert runner.invoke(cli.app, args).exit_code == 1
 
 
-@pytest.mark.parametrize("args", [["plant", ".bic"], ["unknown", "--plant", ".bic"]])
+@pytest.mark.parametrize("args", [["plant", ".bicdop"], ["unknown", "--plant", ".bicdop"]])
 def test_actions_require_prefix(args):
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 2
@@ -380,7 +380,7 @@ def test_delete_project_with_readonly_git_object(workspace, monkeypatch):
     folder = workspace / "clone"
     objects = folder / ".git" / "objects"
     objects.mkdir(parents=True)
-    (folder / ".bic").write_text('{"id":"clone"}')
+    (folder / ".bicdop").write_text('{"id":"clone"}')
     git_object = objects / "object"
     git_object.write_text("object")
     git_object.chmod(cli.stat.S_IREAD)
@@ -391,9 +391,9 @@ def test_delete_project_with_readonly_git_object(workspace, monkeypatch):
 
 
 def test_bic_marker_commands(tmp_path):
-    result = runner.invoke(cli.app, ["--plant", ".bic", str(tmp_path)])
+    result = runner.invoke(cli.app, ["--plant", ".bicdop", str(tmp_path)])
     assert result.exit_code == 0
-    assert (tmp_path / ".bic").is_file()
-    assert runner.invoke(cli.app, ["--check", ".bic", str(tmp_path)]).exit_code == 0
-    assert runner.invoke(cli.app, ["--delete", ".bic", str(tmp_path)]).exit_code == 0
-    assert not (tmp_path / ".bic").exists()
+    assert (tmp_path / ".bicdop").is_file()
+    assert runner.invoke(cli.app, ["--check", ".bicdop", str(tmp_path)]).exit_code == 0
+    assert runner.invoke(cli.app, ["--delete", ".bicdop", str(tmp_path)]).exit_code == 0
+    assert not (tmp_path / ".bicdop").exists()

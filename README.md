@@ -11,13 +11,13 @@ An internal developer toolkit for Windows, built with Python, Typer, and Rich.
 ## Command syntax
 
 Use `bicdop --action [target] [path]`. For example, run
-`bicdop --clone BICDOP_WORKSPACE` or `bicdop --plant .bic`.
+`bicdop --clone BICDOP_WORKSPACE` or `bicdop --plant .bicdop`.
 Use `bicdop --projects` to list projects and `bicdop --help` to see all actions.
 
 ## Interactive mode
 
 Run `bicdop` in CMD or PowerShell to open the `bicdop>` prompt. Type commands
-such as `--projects`, `--help`, or `--check .bic "D:\My Projects\Demo"`.
+such as `--projects`, `--help`, or `--check .bicdop "D:\My Projects\Demo"`.
 Type `--exit` or `--quit` to return to your terminal. Commands such as
 `bicdop --projects` also work directly from CMD or PowerShell.
 
@@ -49,7 +49,7 @@ If your shell allows activation, run `. .\.venv\Scripts\Activate.ps1` to use the
 | Command | What it does |
 | --- | --- |
 | `bicdop` | Start interactive mode in a terminal |
-| `bicdop --projects` | List folders with a .bic marker |
+| `bicdop --projects` | List folders with a .bicdop marker |
 | `bicdop --open notcher` | Open the Notcher folder in File Explorer |
 | `bicdop --doctor` | Check Python, Git, VS Code, workspace, and registry |
 | `bicdop --version` | Show the installed CLI version |
@@ -62,29 +62,29 @@ Use `plant` to create a marker with a project ID and display name in the current
 folder specified by path. An existing marker keeps its contents.
 
 ```powershell
-bicdop --plant .bic
-bicdop --plant .bic "D:\Projects\My Project"
+bicdop --plant .bicdop
+bicdop --plant .bicdop "D:\Projects\My Project"
 ```
 
 Use `check` to verify the marker exists. It exits with status 1 if the marker is missing.
 
 ```powershell
-bicdop --check .bic
-bicdop --check .bic "D:\Projects\My Project"
+bicdop --check .bicdop
+bicdop --check .bicdop "D:\Projects\My Project"
 ```
 
 Use `delete` to remove the marker from the current folder or a specified folder.
 
 ```powershell
-bicdop --delete .bic
-bicdop --delete .bic "D:\Projects\My Project"
+bicdop --delete .bicdop
+bicdop --delete .bicdop "D:\Projects\My Project"
 ```
 
-Run `bicdop --show .bic` to list marked folders and their paths in a table.
+Run `bicdop --show .bicdop` to list marked folders and their paths in a table.
 It uses the same search locations and repeatable `--root` option as `discover`,
 and includes markers with missing or invalid metadata.
 
-Use `bicdop --fix .bic` to repair the current folder's marker, or pass a
+Use `bicdop --fix .bicdop` to repair the current folder's marker, or pass a
 folder path as the final argument. Repair fills missing fields and rebuilds
 unreadable JSON. Valid fields in a JSON object are preserved. Generated IDs
 use the lowercase folder name with spaces replaced by hyphens. Review duplicate
@@ -98,7 +98,7 @@ name as its ID. For a stable ID and custom display name, use JSON:
 {"id": "my-project", "name": "My Project"}
 ```
 
-The `--projects` command lists folders with a `.bic` marker. It uses
+The `--projects` command lists folders with a `.bicdop` marker. It uses
 the same recursive search and repeatable `--root` option as `discover` and
 marks entries without a readable ID as `Review`. It warns about immediate
 workspace subfolders that lack a marker. Commit the marker to share
@@ -143,8 +143,8 @@ To customize the registry, copy [projects.json](src/biosphir_cli/projects.json) 
 
 
 To mark all unmarked folders directly under the workspace, run
-`bicdop --plant .bic BICDOP_WORKSPACE` and confirm the listed folders.
-Use `bicdop --plant .bic BICDOP_WORKSPACE --no-confirm` to skip the prompt.
+`bicdop --plant .bicdop BICDOP_WORKSPACE` and confirm the listed folders.
+Use `bicdop --plant .bicdop BICDOP_WORKSPACE --no-confirm` to skip the prompt.
 
 
 Use `bicdop --collect` to preview and confirm moves into the workspace.
@@ -164,7 +164,7 @@ bicdop --rename "project-id" PROJECT_ID "new-project-id"
 bicdop --rename "project-id" PROJECT_NAME "New Project Name"
 ```
 
-The selected field is saved in `.bic`. IDs are stored in lowercase and
+The selected field is saved in `.bicdop`. IDs are stored in lowercase and
 must be unique across discovered projects. Display names must also be unique
 when renaming, ignoring letter case. The folder path stays the same.
 After changing the ID of the selected project, select it again using the new ID.
@@ -226,7 +226,7 @@ Choose a location within the discovery roots to keep finding the project by ID.
 
 Project markers store `schema_version` and an optional project-relative
 Python `entrypoint`. Use `bicdop --run project-id` or `--run` after
-selecting a project in interactive mode. Use `--fix .bic` to fill missing fields.
+selecting a project in interactive mode. Use `--fix .bicdop` to fill missing fields.
 
 ## Compatibility and development
 
@@ -239,6 +239,6 @@ For development, install dependencies with `python -m pip install -e ".[test]"` 
 
 When upgrading an existing installation, uninstall the old distribution first with `python -m pip uninstall biosphir-cli`, then install Bicdop in the same environment. This avoids two distributions owning the same Python package and executable.
 
-Bicdop discovers projects with a `.bic` marker. To migrate a project, rename its existing marker to `.bic` if that filename is available. Keep the JSON contents intact. Gwen launch configurations should invoke `bicdop`. Existing workspace settings are still read from the original configuration path, and legacy environment variables are accepted as fallbacks.
+Bicdop discovers projects with a `.bicdop` marker. To migrate a project, rename its existing marker to `.bicdop` if that filename is available. Keep the JSON contents intact. Gwen launch configurations should invoke `bicdop`. Existing workspace settings are still read from the original configuration path, and legacy environment variables are accepted as fallbacks.
 
 For the registry and task runner, see [Configured projects](CONFIGURED_PROJECTS.md). The option-style commands above cover the existing workspace workflow.
