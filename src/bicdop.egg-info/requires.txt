@@ -1,4 +1,0 @@
-prompt-toolkit<4,>=3
-
-[test]
-pytest<10,>=8
