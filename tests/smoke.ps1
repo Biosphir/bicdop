@@ -90,6 +90,16 @@ try {
     Import-Module "$PSScriptRoot/../Bicdop/Bicdop.psd1"
     Set-TestConfig (Get-Module Bicdop)
     Assert-That (@(bicdop projects).Count -eq 3) 'Registry did not persist across module sessions'
+    Set-Location $root
+    $moved = Join-Path $root 'Workspace moved'
+    Move-Item -LiteralPath $workspace -Destination $moved
+    Set-Location $moved
+    bicdop workspace --set
+    $relocated = @(bicdop projects)
+    Assert-That ($relocated.Count -eq 3) 'Projects were lost after workspace relocation'
+    Assert-That ($relocated[0].Path -eq (Join-Path $moved $relocated[0].Project)) 'Relocated project path is incorrect'
+    bicdop switch 1
+    Assert-That ((Get-Location).Path -eq $relocated[0].Path) 'Switch failed after workspace relocation'
     $update = bicdop update --check
     Assert-That ($update.Installed -eq '0.4.0' -and $update.UpdateAvailable) 'Update check returned the wrong version'
     Assert-Throws { bicdop update --yes } 'supports update --check only'

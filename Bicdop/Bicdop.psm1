@@ -33,7 +33,7 @@ function Get-BicdopDrives {
 
 function Find-BicdopFolders([string[]]$Roots, [scriptblock]$Matches) {
     $pending = [System.Collections.Generic.Stack[IO.DirectoryInfo]]::new()
-    $comparer = if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
+    $comparer = if ($script:RunningOnWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
     $seen = [System.Collections.Generic.HashSet[string]]::new($comparer)
     foreach ($root in $Roots) {
         try { $pending.Push((Get-BicdopFolder $root)) }
@@ -95,7 +95,8 @@ function Register-BicdopWorkspace {
                 }
                 foreach ($project in $state.projects.Values) {
                     if ($project.workspace -ne $marker.id -or -not (Test-BicdopUnder $project.path $previous.path)) { continue }
-                    $candidate = Join-Path $folder.FullName ([IO.Path]::GetRelativePath($previous.path, $project.path))
+                    $relative = $project.path.Substring($previous.path.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
+                    $candidate = Join-Path $folder.FullName $relative
                     $candidate = [IO.Path]::GetFullPath($candidate)
                     $found = Read-BicdopMarker (Join-Path $candidate '.bicdop')
                     if ($found -and $found.id -eq $project.id) { $project.path = $candidate }

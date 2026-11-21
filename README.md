@@ -1,6 +1,6 @@
 # Bicdop 0.4.0
 
-Bicdop runs inside your current PowerShell 7 session on Windows.
+Bicdop runs inside your current Windows PowerShell 5.1 or PowerShell 7 session.
 
 ```powershell
 Import-Module .\Bicdop\Bicdop.psd1
@@ -52,7 +52,9 @@ procedure are available.
 
 ## Verify on Windows
 
-Run `pwsh -NoProfile -File .\tests\smoke.ps1` from the checkout root.
+Run `powershell.exe -NoProfile -File .\tests\smoke.ps1` for Windows
+PowerShell 5.1 and `pwsh -NoProfile -File .\tests\smoke.ps1` for
+PowerShell 7 from the checkout root.
 For a manual check, import the module in Windows Terminal, enable the
 prompt, and use a temporary workspace to test native commands and
 `bicdop switch`. Start a broad scan and press Ctrl+C, then verify that

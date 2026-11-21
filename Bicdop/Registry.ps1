@@ -1,11 +1,32 @@
 $script:RegistryPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData', 'DoNotVerify')) 'Bicdop/registry.json'
-$script:PathComparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+$script:RunningOnWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+$script:PathComparison = if ($script:RunningOnWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+
+function Convert-BicdopJsonValue($Value) {
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $map = @{}
+        foreach ($property in $Value.PSObject.Properties) {
+            $map[$property.Name] = Convert-BicdopJsonValue $property.Value
+        }
+        return $map
+    }
+    if ($Value -is [array]) {
+        $items = foreach ($item in $Value) { ,(Convert-BicdopJsonValue $item) }
+        return ,@($items)
+    }
+    return $Value
+}
+
+function Read-BicdopJson([string]$Path) {
+    $value = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path)) -ErrorAction Stop
+    return Convert-BicdopJsonValue $value
+}
 
 function Read-BicdopRegistry {
     if (-not [IO.File]::Exists($script:RegistryPath)) {
         return @{ schema = 1; active = $null; workspaces = @{}; projects = @{} }
     }
-    $state = [IO.File]::ReadAllText($script:RegistryPath) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $state = Read-BicdopJson $script:RegistryPath
     if ($state.schema -ne 1 -or $state.workspaces -isnot [System.Collections.IDictionary] -or
         $state.projects -isnot [System.Collections.IDictionary]) {
         throw "Invalid Bicdop registry: $script:RegistryPath"
@@ -33,7 +54,11 @@ function Save-BicdopRegistry($State) {
     $temporary = "$script:RegistryPath.$([guid]::NewGuid()).tmp"
     try {
         [IO.File]::WriteAllText($temporary, (ConvertTo-Json -InputObject $State -Depth 8))
-        [IO.File]::Move($temporary, $script:RegistryPath, $true)
+        if ([IO.File]::Exists($script:RegistryPath)) {
+            [IO.File]::Replace($temporary, $script:RegistryPath, [NullString]::Value)
+        } else {
+            [IO.File]::Move($temporary, $script:RegistryPath)
+        }
     } finally {
         [IO.File]::Delete($temporary)
     }
@@ -58,7 +83,7 @@ function Write-BicdopMarker([string]$Path, $Marker) {
 function Read-BicdopMarker([string]$Path) {
     if (-not [IO.File]::Exists($Path)) { return }
     try {
-        $marker = [IO.File]::ReadAllText($Path) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        $marker = Read-BicdopJson $Path
         $id = [guid]::Empty
         if ($marker.schema -eq 1 -and [guid]::TryParse($marker.id, [ref]$id) -and $id -ne [guid]::Empty) {
             $marker.id = $id.ToString()
