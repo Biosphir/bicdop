@@ -1,4 +1,19 @@
-# Bicdop 0.5.9
+# Bicdop 0.7.4
+
+## Windows installer
+
+Download BicdopSetup.exe from Releases and open Bicdop from the Start menu.
+The per-user installer includes a fallback copy of Bicdop. The launcher checks
+for a newer stable GitHub release and starts the best available copy in a terminal.
+Use update --apply to download an update manually, then reopen the launcher.
+The launcher uses Windows PowerShell; the module also supports PowerShell 7.
+
+For maintainers, run installer/Build.ps1 -OutputDirectory PATH with Inno Setup 6
+installed. Attach BicdopSetup.exe and the generated Bicdop-VERSION-module.zip
+to the GitHub Release tagged vVERSION. Keep the ZIP name unchanged. The updater
+checks the SHA-256 digest from GitHub before installing the module.
+
+## Source checkout
 
 Bicdop runs inside your current Windows PowerShell 5.1 or PowerShell 7 session.
 
@@ -12,10 +27,14 @@ commands directly, such as `workspace --set`, `scan`, `switch 1`, or `help`.
 
 Use `mkdir PATH`, `cd PATH`, `cd..`, `li [PATH]` (also `ls` or `dir`), and
 `pwd` to work with directories. `uote paths and names with spaces. The shell
-accepts one Bicdop command per line. Type `exit` to return to PowerShell.
+accepts one Bicdop command per line. Use `flush` to clear the display and `exit` to return to PowerShell.
 From PowerShell, use the prefix for individual commands, for example `bicdop show`.
 
 Add the module import to your PowerShell profile to load it on startup.
+
+Use open to open the current directory in File Explorer, open --workspace
+for the active workspace, or open "Project Name" for a folder inside that workspace.
+Bicdop restores a minimized Explorer window for the target folder and requests focus. If Windows initially denies focus, Bicdop retries activation before falling back to the normal Explorer window.
 
 ## Data and recovery
 
@@ -64,6 +83,16 @@ specific rows from the latest scan.
 
 ## Manage project markers
 
+Inside Bicdop, use marker --set FIELD VALUE in the project root. Quote text
+such as marker --set release_channel "beta". Numbers, true, false, and null
+are accepted without quotes. From PowerShell, preserve the inner quotes with
+bicdop marker --set release_channel '"beta"'. Bicdop manages schema (the
+marker format version), id, and workspace.
+
+
+Run marker --check to read the current folder marker, or marker "Project Name"
+--check to read a project marker from the active workspace.
+
 `bicdop marker --clear` removes the current folder's `.bicdop` marker and
 project registration. `bicdop marker --replant` writes or refreshes the marker
 and registers the folder with the active workspace. A project marker belongs at the project root, directly under the active
@@ -95,7 +124,7 @@ For a manual check, import the module in Windows Terminal, enable the
 prompt, and use a temporary workspace to test native commands and
 `bicdop switch`. Start a broad scan and press Ctrl+C, then verify that
 the prompt still accepts commands and that the canceled scan cannot
-be used with `bicdop plant 1`. Type `exit` to return to PowerShell.
+be used with `bicdop plant 1`. Use `flush` to clear the display and `exit` to return to PowerShell.
 
 
 ## Run a project
@@ -127,3 +156,35 @@ script completion. HTML previews already open separately in the default browser.
 Running the same project again with --detach replaces the previous process
 started by this Bicdop session. Bicdop requests a normal close when possible,
 then stops the process if it stays open. Browser tabs are managed by the browser.
+
+## Build with PyInstaller
+
+Use pyinstaller in a marked project or pyinstaller "Project Name" to build a
+direct child of the active workspace. If pyinstaller_command is empty, Bicdop
+asks for a full command such as python -m PyInstaller --clean Notcher.spec,
+saves it in .bicdop, then starts the build. An empty response cancels.
+Use pyinstaller --set "COMMAND-LINE" to save or replace the command without building.
+Bicdop uses the project's .venv when available and runs the build from its root.
+
+Project markers store github_url when Git is available and the project's origin
+points to GitHub. Planting and replanting capture a clean HTTPS link without
+credentials. Use marker --replant to refresh it after the remote changes.
+
+Run github --status from a Git project root to check its GitHub origin, working
+tree, and latest branch commit. It queries GitHub without fetching objects.
+Synced means the working tree is clean and the local commit matches GitHub.
+
+From a Git project root, github --commit "MESSAGE" commits staged changes.
+Use github --fetch to refresh origin refs, github --pull for a fast-forward
+merge, and github --push to publish the current branch and set its upstream.
+Remote operations use the configured GitHub origin and Git credentials.
+
+Use github --stage FILE [...] to stage specific paths or github --stage --all
+for all new, modified, and deleted files. Git ignore rules still apply.
+
+Use github --publish to stage all changes, create a summary commit if needed,
+and push. The older github --push --force spelling still works. Both use a
+normal Git push, which rejects non-fast-forward updates.
+Use github --diff and github --diff --staged to review changes, or use
+github --unstage FILE [...] and github --unstage --all to undo staging while
+keeping working files. Use github --status to list staged and unstaged paths.

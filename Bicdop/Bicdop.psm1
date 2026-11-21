@@ -1,4 +1,5 @@
 . "$PSScriptRoot/Registry.ps1"
+. "$PSScriptRoot/Update.ps1"
 
 $script:ScanRows = @()
 $script:ProjectRows = @()
@@ -287,7 +288,7 @@ function Resolve-BicdopMainFile([string]$Root, [string]$File) {
     return $path
 }
 
-function Set-BicdopProjectField([string]$Root, [string]$Field, [string]$Value) {
+function Set-BicdopProjectField([string]$Root, [string]$Field, [object]$Value) {
     $markerPath = Join-Path $Root '.bicdop'
     Invoke-BicdopRegistryWrite {
         param($state)
@@ -334,6 +335,102 @@ function Find-BicdopProjectVersion([string]$Root) {
     }
 }
 
+function Find-BicdopExplorerWindow($Shell, [string]$Path) {
+    $target = $Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
+    foreach ($window in $Shell.Windows()) {
+        try {
+            if ([IO.Path]::GetFileName($window.FullName) -ine 'explorer.exe') { continue }
+            $current = [string]$window.Document.Folder.Self.Path
+            if (!$current) {
+                $uri = $null
+                if ([uri]::TryCreate([string]$window.LocationURL, [UriKind]::Absolute, [ref]$uri) -and $uri.IsFile) {
+                    $current = $uri.LocalPath
+                }
+            }
+            if ($current -and $current.TrimEnd([IO.Path]::DirectorySeparatorChar).Equals($target, $script:PathComparison)) {
+                return [IntPtr]$window.HWND
+            }
+        } catch [Runtime.InteropServices.COMException] {
+            # A window can close or change tabs during enumeration.
+        }
+    }
+}
+
+function Open-BicdopExplorer([string]$Path) {
+    try {
+        $shell = New-Object -ComObject Shell.Application -ErrorAction Stop
+        $window = Find-BicdopExplorerWindow $shell $Path
+        if (!$window) {
+            Invoke-Item -LiteralPath $Path -ErrorAction Stop
+            for ($attempt = 0; $attempt -lt 30 -and !$window; $attempt++) {
+                Start-Sleep -Milliseconds 100
+                $window = Find-BicdopExplorerWindow $shell $Path
+            }
+        }
+        if (!$window) { return }
+        if (!('Bicdop.ExplorerActivation' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+namespace Bicdop {
+    public static class ExplorerActivation {
+        [DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr handle);
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindowAsync(IntPtr handle, int command);
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y,
+                                                int width, int height, uint flags);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr handle, IntPtr process);
+
+        [DllImport("user32.dll")]
+        private static extern bool AttachThreadInput(uint source, uint target, bool attach);
+
+        public static bool Activate(IntPtr handle) {
+            if (SetForegroundWindow(handle)) return true;
+
+            uint thread = GetCurrentThreadId();
+            uint foreground = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+            if (foreground != 0 && foreground != thread && AttachThreadInput(thread, foreground, true)) {
+                try {
+                    if (SetForegroundWindow(handle)) return true;
+                } finally {
+                    AttachThreadInput(thread, foreground, false);
+                }
+            }
+
+            const uint noSize = 0x0001;
+            const uint noMove = 0x0002;
+            const uint showWindow = 0x0040;
+            return SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0, noSize | noMove | showWindow);
+        }
+    }
+}
+"@
+        }
+        if ([Bicdop.ExplorerActivation]::IsIconic($window)) {
+            $null = [Bicdop.ExplorerActivation]::ShowWindowAsync($window, 9)
+        }
+        if (![Bicdop.ExplorerActivation]::Activate($window)) {
+            Write-Verbose 'Windows did not allow Explorer to be moved in front.'
+        }
+    } catch {
+        Write-Verbose "Explorer activation unavailable: $_"
+        Invoke-Item -LiteralPath $Path -ErrorAction Stop
+    }
+}
+
 function Get-BicdopNamedFolder([string]$Name) {
     $workspace = Get-BicdopActive (Read-BicdopRegistry)
     $matches = @(Get-BicdopChildFolders (Get-BicdopFolder $workspace.path) | Where-Object Name -eq $Name)
@@ -357,6 +454,56 @@ function Stop-BicdopPreviousRun([string]$Root) {
     }
     $script:DetachedRuns.Remove($Root)
     $previous.Dispose()
+}
+
+function Get-BicdopPython([string]$Root) {
+    $python = Join-Path $Root '.venv/Scripts/python.exe'
+    if (![IO.File]::Exists($python)) {
+        $python = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        if (!$python) { throw 'Python was not found on PATH.' }
+    }
+    return $python
+}
+
+function ConvertTo-BicdopPyInstallerArgs([string]$Command) {
+    $tokens = @(ConvertFrom-BicdopInput $Command)
+    if ($tokens.Count -lt 4 -or $tokens[0] -notin 'python','python.exe' -or
+        $tokens[1] -ne '-m' -or $tokens[2] -ine 'PyInstaller') {
+        throw 'Enter a full command, for example: python -m PyInstaller --clean Notcher.spec'
+    }
+    $tokens | Select-Object -Skip 3
+}
+
+function Invoke-BicdopPyInstaller([object[]]$Options) {
+    $set = $Options.Count -eq 2 -and $Options[0] -eq '--set'
+    if (!$set -and ($Options.Count -gt 1 -or ($Options.Count -and $Options[0] -like '--*'))) {
+        throw 'Usage: bicdop pyinstaller [PROJECT] | bicdop pyinstaller --set "COMMAND-LINE"'
+    }
+    $folder = if (!$set -and $Options.Count) { Get-BicdopNamedFolder $Options[0] } else { Get-BicdopFolder }
+    $marker = Read-BicdopMarker (Join-Path $folder.FullName '.bicdop')
+    if (!$marker) { throw "No valid .bicdop project marker in '$($folder.FullName)'. Run bicdop plant first." }
+
+    $command = if ($set) { [string]$Options[1] } else { $marker.pyinstaller_command }
+    $needsPreset = !$set -and ($command -isnot [string] -or [string]::IsNullOrWhiteSpace($command))
+    if ($needsPreset) {
+        $command = Read-Host "Full PyInstaller command for '$($folder.Name)' (Enter to cancel)"
+        if ([string]::IsNullOrWhiteSpace($command)) { return }
+    }
+    $buildArgs = @(ConvertTo-BicdopPyInstallerArgs $command)
+    if ($set -or $needsPreset) {
+        $saved = Set-BicdopProjectField $folder.FullName 'pyinstaller_command' $command.Trim()
+        Write-Host "Saved PyInstaller command: $saved"
+        if ($set) { return }
+    }
+
+    $python = Get-BicdopPython $folder.FullName
+    Push-Location -LiteralPath $folder.FullName -StackName BicdopPyInstaller
+    try {
+        & $python -m PyInstaller @buildArgs
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller exited with code $LASTEXITCODE." }
+    } finally {
+        Pop-Location -StackName BicdopPyInstaller
+    }
 }
 
 function Invoke-BicdopRun([object[]]$Options) {
@@ -385,14 +532,7 @@ function Invoke-BicdopRun([object[]]$Options) {
         return
     }
     $runtime = switch ($extension) {
-        '.py' {
-            $python = Join-Path $folder.FullName '.venv/Scripts/python.exe'
-            if (![IO.File]::Exists($python)) {
-                $python = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-                if (!$python) { throw 'Python was not found on PATH.' }
-            }
-            $python
-        }
+        '.py' { Get-BicdopPython $folder.FullName }
         '.ps1' {
             $engine = if ($PSVersionTable.PSEdition -eq 'Desktop') { 'powershell.exe' } else { 'pwsh.exe' }
             Join-Path $PSHOME $engine
@@ -422,6 +562,242 @@ function Invoke-BicdopRun([object[]]$Options) {
     } finally {
         Pop-Location -StackName BicdopRun
     }
+}
+
+function Get-BicdopGitHubUrl([string]$Root) {
+    if (!(Test-Path -LiteralPath (Join-Path $Root '.git'))) { return }
+    $ErrorActionPreference = 'Continue'
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$git) { return }
+    $repository = & $git.Source -C $Root rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -ne 0 -or !$repository -or
+        ![IO.Path]::GetFullPath($repository).Equals([IO.Path]::GetFullPath($Root), $script:PathComparison)) { return }
+
+    $remote = & $git.Source -C $Root remote get-url origin 2>$null
+    if ($LASTEXITCODE -ne 0 -or !$remote) { return }
+    ConvertTo-BicdopGitHubUrl $remote
+}
+
+function ConvertTo-BicdopGitHubUrl([string]$Remote) {
+    if ($remote -match '^git@github\.com:(?<path>[^?#]+)$') {
+        $repoPath = $Matches.path
+    } else {
+        $uri = $null
+        if (![uri]::TryCreate([string]$remote, [UriKind]::Absolute, [ref]$uri) -or
+            $uri.Host -ne 'github.com' -or $uri.Scheme -notin 'https','ssh') { return }
+        $repoPath = $uri.AbsolutePath.Trim('/')
+    }
+    $repoPath = $repoPath -replace '\.git$', ''
+    if ($repoPath -match '^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$' -and
+        ($repoPath.Split('/')[1] -notin '.','..')) {
+        return "https://github.com/$repoPath"
+    }
+}
+
+function Get-BicdopGitRepository {
+    $root = (Get-BicdopFolder).FullName
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$git) { throw 'Git was not found on PATH.' }
+
+    $ErrorActionPreference = 'Continue'
+    $repository = & $git.Source -C $root rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -ne 0 -or !$repository -or
+        ![IO.Path]::GetFullPath($repository).Equals([IO.Path]::GetFullPath($root), $script:PathComparison)) {
+        throw 'The current folder is not the root of a Git repository.'
+    }
+    [pscustomobject]@{ Root = $root; Git = $git.Source }
+}
+
+function Get-BicdopGitOriginRef($Repository, [string]$Branch, [switch]$RequireOrigin) {
+    $ErrorActionPreference = 'Continue'
+    $trackingRemote = & $Repository.Git -C $Repository.Root config --get "branch.$Branch.remote" 2>$null
+    if ($trackingRemote -ceq 'origin') {
+        $trackingRef = & $Repository.Git -C $Repository.Root config --get "branch.$Branch.merge" 2>$null
+        if ($trackingRef -clike 'refs/heads/*') { return $trackingRef }
+    } elseif ($RequireOrigin -and $trackingRemote) {
+        throw 'This branch tracks another remote. Set its upstream to origin before using github --pull or --push.'
+    }
+    "refs/heads/$Branch"
+}
+
+function Show-BicdopGitHubStatus {
+    $repository = Get-BicdopGitRepository
+    $root = $repository.Root
+    $ErrorActionPreference = 'Continue'
+    $url = Get-BicdopGitHubUrl $root
+    $branch = & $repository.Git -C $root symbolic-ref --quiet --short HEAD 2>$null
+    $local = & $repository.Git -C $root rev-parse --verify HEAD 2>$null
+    $changes = @(& $repository.Git --no-optional-locks -C $root -c core.quotePath=false status --porcelain=v1 --untracked-files=all 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the local Git working tree.' }
+    $staged = [Collections.Generic.List[string]]::new()
+    $unstaged = [Collections.Generic.List[string]]::new()
+    foreach ($entry in $changes) {
+        $code = $entry.Substring(0, 2)
+        $path = $entry.Substring(3)
+        if ($code -in 'DD','AU','UD','UA','DU','AA','UU') {
+            $unstaged.Add("Conflict $path")
+        } elseif ($code -eq '??') {
+            $unstaged.Add("New $path")
+        } else {
+            if ($code[0] -ne ' ') { $staged.Add("$($code[0]) $path") }
+            if ($code[1] -ne ' ') { $unstaged.Add("$($code[1]) $path") }
+        }
+    }
+    $status = [ordered]@{
+        GitHub          = if ($url) { $url } else { 'No GitHub origin configured' }
+        Branch          = if ($branch) { $branch } else { 'Detached HEAD' }
+        RemoteBranch    = ''
+        RemoteReachable = $false
+        Commits         = 'Not compared'
+        WorkingTree     = if ($changes.Count) { "$($changes.Count) changed or untracked entries" } else { 'Clean' }
+        Staged          = if ($staged.Count) { $staged -join [Environment]::NewLine } else { 'None' }
+        Unstaged        = if ($unstaged.Count) { $unstaged -join [Environment]::NewLine } else { 'None' }
+        Synced          = $false
+    }
+    if (!$url) { return [pscustomobject]$status }
+
+    $ref = if ($branch) { "refs/heads/$branch" } else { 'HEAD' }
+    if ($branch) {
+        $ref = Get-BicdopGitOriginRef $repository $branch
+        $status.RemoteBranch = $ref.Substring('refs/heads/'.Length)
+    }
+    $previousPrompt = [Environment]::GetEnvironmentVariable('GIT_TERMINAL_PROMPT', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', '0', 'Process')
+        $remoteRows = @(& $repository.Git -C $root -c credential.interactive=never -c http.lowSpeedLimit=1 -c http.lowSpeedTime=10 ls-remote --refs origin $ref 2>$null)
+        $remoteExit = $LASTEXITCODE
+    } finally {
+        if ($null -eq $previousPrompt) {
+            [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', [NullString]::Value, 'Process')
+        } else {
+            [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', $previousPrompt, 'Process')
+        }
+    }
+    if ($remoteExit -ne 0) {
+        $status.Commits = 'Could not verify GitHub origin. Check access and connectivity.'
+        return [pscustomobject]$status
+    }
+    $status.RemoteReachable = $true
+    $remoteCommit = foreach ($line in $remoteRows) {
+        if ($line -cmatch '^([a-f0-9]{40}|[a-f0-9]{64})\t(.+)$' -and $Matches[2] -ceq $ref) {
+            $Matches[1]
+            break
+        }
+    }
+    if (!$branch) { $status.Commits = 'Detached HEAD. Switch to a branch to compare.' }
+    elseif (!$local) { $status.Commits = 'The local branch has no commits.' }
+    elseif (!$remoteCommit) { $status.Commits = 'Branch has not been published to GitHub.' }
+    elseif ($local -ceq $remoteCommit) {
+        $status.Commits = 'Up to date'
+        $status.Synced = !$changes.Count
+    } else {
+        $counts = & $repository.Git -C $root rev-list --left-right --count "HEAD...$remoteCommit" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $counts -match '^\s*(\d+)\s+(\d+)\s*$') {
+            $status.Commits = "$($Matches[1]) ahead, $($Matches[2]) behind"
+        } else {
+            $status.Commits = 'Different commits. Fetch is needed to determine ahead/behind counts.'
+        }
+    }
+    return [pscustomobject]$status
+}
+
+function Invoke-BicdopGitHub([object[]]$Options) {
+    $action = $Options[0]
+    $quickPush = ($action -eq '--publish' -and $Options.Count -eq 1) -or
+        ($action -eq '--push' -and $Options.Count -eq 2 -and $Options[1] -eq '--force')
+    if ($quickPush) { $action = '--push' }
+    if ($action -notin '--status','--stage','--unstage','--diff','--commit','--fetch','--pull','--push' -or
+        ($action -eq '--commit' -and ($Options.Count -ne 2 -or [string]::IsNullOrWhiteSpace($Options[1]))) -or
+        ($action -in '--stage','--unstage' -and ($Options.Count -lt 2 -or ('--all' -in $Options -and $Options.Count -ne 2))) -or
+        ($action -eq '--diff' -and ($Options.Count -gt 2 -or ($Options.Count -eq 2 -and $Options[1] -ne '--staged'))) -or
+        ($action -notin '--commit','--stage','--unstage','--diff' -and $Options.Count -ne 1 -and !$quickPush)) {
+        throw 'Usage: bicdop github --status | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch | --pull | --push | --publish. Use --all with --stage or --unstage.'
+    }
+    if ($action -eq '--status') {
+        Write-Host 'Checking the local working tree and GitHub branch...'
+        Show-BicdopGitHubStatus
+        return
+    }
+
+    $repository = Get-BicdopGitRepository
+    $ErrorActionPreference = 'Continue'
+    if ($action -in '--fetch','--pull','--push' -and !(Get-BicdopGitHubUrl $repository.Root)) {
+        throw 'Configure a GitHub origin for this repository first.'
+    }
+    $arguments = switch ($action) {
+        '--stage' {
+            if ($Options[1] -eq '--all') {
+                Write-Host 'Staging all changes...'
+                'add', '--all'
+            } else {
+                Write-Host 'Staging selected paths...'
+                '--literal-pathspecs', 'add', '--'
+                $Options | Select-Object -Skip 1
+            }
+        }
+        '--unstage' {
+            Write-Host 'Removing changes from staging...'
+            '--literal-pathspecs', 'reset', '--quiet', '--'
+            if ($Options[1] -eq '--all') { '.' }
+            else { $Options | Select-Object -Skip 1 }
+        }
+        '--diff' {
+            '--no-pager', 'diff'
+            if ($Options[1] -eq '--staged') { '--cached' }
+            '--'
+        }
+        '--commit' {
+            Write-Host 'Creating a commit from staged changes...'
+            'commit', '-m', $Options[1]
+        }
+        '--fetch' {
+            Write-Host 'Fetching changes from origin...'
+            'fetch', '--progress', 'origin'
+        }
+        default {
+            $branch = & $repository.Git -C $repository.Root symbolic-ref --quiet --short HEAD 2>$null
+            if (!$branch) { throw 'Switch to a branch before pulling or pushing.' }
+            $reference = Get-BicdopGitOriginRef $repository $branch -RequireOrigin
+            if ($action -eq '--pull') {
+                Write-Host "Pulling $reference from origin (fast-forward only)..."
+                'pull', '--progress', '--ff-only', 'origin', $reference
+            } else {
+                $pushUrls = @(& $repository.Git -C $repository.Root remote get-url --push --all origin 2>$null)
+                if ($LASTEXITCODE -ne 0 -or $pushUrls.Count -ne 1 -or !(ConvertTo-BicdopGitHubUrl $pushUrls[0])) {
+                    throw 'Origin must have exactly one GitHub push URL.'
+                }
+                'push', '--progress', '--set-upstream', 'origin', "HEAD:$reference"
+            }
+        }
+    }
+    if ($quickPush) {
+        Write-Host 'Preparing all changes for commit and push...'
+        Invoke-BicdopGitHub @('--stage', '--all')
+        $changes = @(& $repository.Git -C $repository.Root diff --cached --no-renames --name-status -- 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw 'Could not summarize staged changes.' }
+        if ($changes.Count) {
+            $added = @($changes -cmatch '^A\t').Count
+            $deleted = @($changes -cmatch '^D\t').Count
+            $modified = $changes.Count - $added - $deleted
+            $message = "+$added files -$deleted files $modified Modified"
+            Write-Host "Commit message: $message"
+            Invoke-BicdopGitHub @('--commit', $message)
+        } else {
+            Write-Host 'No changes to commit. Checking for commits to push...'
+        }
+    }
+    if ($action -eq '--push') { Write-Host "Pushing $branch to origin ($reference)..." }
+    & $repository.Git -C $repository.Root @arguments
+    if ($LASTEXITCODE -ne 0) { throw "Git $($action.Substring(2)) exited with code $LASTEXITCODE." }
+    if ($action -in '--stage','--unstage') {
+        $staged = @(& $repository.Git -C $repository.Root diff --cached --name-only -- 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+            if ($staged.Count) { Write-Host "$($staged.Count) path(s) ready to commit." }
+            else { Write-Host 'No changes staged.' }
+            return
+        }
+    }
+    if ($action -ne '--diff') { Write-Host "Git $($action.Substring(2)) complete." }
 }
 
 function Invoke-BicdopPlant([object[]]$Options) {
@@ -482,7 +858,8 @@ function Invoke-BicdopPlant([object[]]$Options) {
                     param($latest)
                     if ($id -and -not $latest.workspaces.Contains($id)) { throw 'Chosen workspace no longer exists.' }
                     $marker = @{ schema = 1; id = [guid]::NewGuid().ToString(); workspace = $id; main_file = [string](Find-BicdopMainFile $folder.FullName)
-                        version = [string](Find-BicdopProjectVersion $folder.FullName) }
+                        version = [string](Find-BicdopProjectVersion $folder.FullName)
+                        github_url = [string](Get-BicdopGitHubUrl $folder.FullName) }
                     $json = Write-BicdopMarker $path $marker
                     try {
                         $latest.projects[$marker.id] = @{ id = $marker.id; name = $folder.Name
@@ -523,8 +900,10 @@ function Stage-BicdopProjectMarker($Folder, $State, [string]$WorkspaceId, [bool]
     $id = $null
     $mainFile = $null
     $version = $null
+    $pyinstallerCommand = $null
     if ($Replant) {
         $marker = Read-BicdopMarker $path
+        $pyinstallerCommand = $marker.pyinstaller_command
         $version = Find-BicdopProjectVersion $Folder.FullName
         if (!$version) { $version = $marker.version }
         $mainFile = if ($marker.main_file -is [string] -and $marker.main_file) { $marker.main_file } else { Find-BicdopMainFile $Folder.FullName }
@@ -544,7 +923,15 @@ function Stage-BicdopProjectMarker($Folder, $State, [string]$WorkspaceId, [bool]
     }
     try {
         if ($Replant) {
-            $null = Write-BicdopMarker $path @{ schema = 1; id = $id; workspace = $WorkspaceId; main_file = [string]$mainFile; version = [string]$version }
+            if (!$marker) { $marker = @{} }
+            $marker.schema = 1
+            $marker.id = $id
+            $marker.workspace = $WorkspaceId
+            $marker.main_file = [string]$mainFile
+            $marker.version = [string]$version
+            $marker.pyinstaller_command = [string]$pyinstallerCommand
+            $marker.github_url = [string](Get-BicdopGitHubUrl $Folder.FullName)
+            $null = Write-BicdopMarker $path $marker
         }
     } catch {
         if ($backup) { [IO.File]::Move($backup, $path) }
@@ -557,10 +944,66 @@ function Stage-BicdopProjectMarker($Folder, $State, [string]$WorkspaceId, [bool]
     return @{ Path = $path; Backup = $backup; Written = $Replant }
 }
 
+function Set-BicdopMarkerValue([string]$Field, [string]$Literal) {
+    if ($Field -notmatch '^[A-Za-z_][A-Za-z0-9_-]*$') {
+        throw 'Use a field name such as github_url or release_channel.'
+    }
+    if ($Field -in 'schema','id','workspace') { throw "Bicdop manages '$Field'. It cannot be changed with marker --set." }
+
+    $value = $null
+    if ($Literal.StartsWith('"') -or $Literal.StartsWith("'")) {
+        $tokens = @(ConvertFrom-BicdopInput $Literal)
+        if ($tokens.Count -ne 1) { throw 'Enter exactly one quoted value.' }
+        $value = [string]$tokens[0]
+    } elseif ($Literal -cin 'true','false') {
+        $value = $Literal -ceq 'true'
+    } elseif ($Literal -match '^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$') {
+        $value = (ConvertFrom-Json -InputObject ('{"value":' + $Literal + '}') -ErrorAction Stop).value
+        if ($value -is [double] -and [double]::IsInfinity($value)) { throw 'The number is out of range.' }
+    } elseif ($Literal -cne 'null') {
+        throw 'Put text values in quotes. Unquoted values must be a number, true, false, or null.'
+    }
+
+    $root = (Get-BicdopFolder).FullName
+    if ($Field -in 'main_file','version','github_url','pyinstaller_command' -and $null -ne $value) {
+        if ($value -isnot [string]) { throw "Put the value of '$Field' in quotes." }
+        if ($value) {
+            switch ($Field) {
+                'main_file' { $null = Resolve-BicdopMainFile $root $value }
+                'version' {
+                    if ($value -notmatch '^\d[0-9A-Za-z.!+_-]*$') { throw 'Enter a project version such as "1.2.3".' }
+                }
+                'github_url' {
+                    if ($value -notmatch '^https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$' -or
+                        ($value.Split('/')[-1] -in '.','..')) {
+                        throw 'Use a GitHub repository URL such as "https://github.com/owner/project".'
+                    }
+                }
+                'pyinstaller_command' { $null = ConvertTo-BicdopPyInstallerArgs $value }
+            }
+        }
+    }
+
+    $null = Set-BicdopProjectField $root $Field $value
+    Write-Host "Saved '$Field' in .bicdop."
+}
+
 function Invoke-BicdopMarker([object[]]$Options) {
+    if ($Options.Count -eq 3 -and $Options[0] -eq '--set') {
+        Set-BicdopMarkerValue $Options[1] $Options[2]
+        return
+    }
+    if (($Options.Count -eq 1 -and $Options[0] -eq '--check') -or
+        ($Options.Count -eq 2 -and $Options[0] -notlike '--*' -and $Options[1] -eq '--check')) {
+        $folder = if ($Options.Count -eq 2) { Get-BicdopNamedFolder $Options[0] } else { Get-BicdopFolder }
+        $marker = Join-Path $folder.FullName '.bicdop'
+        if (![IO.File]::Exists($marker)) { throw "No .bicdop marker in '$($folder.FullName)'." }
+        Get-Content -LiteralPath $marker -Raw -Encoding UTF8 -ErrorAction Stop
+        return
+    }
     if ($Options.Count -notin 1,2 -or $Options[0] -notin '--clear','--replant' -or
         ($Options.Count -eq 2 -and $Options[1] -ne '--all')) {
-        throw 'Usage: bicdop marker [--clear | --replant] [--all]'
+        throw 'Usage: bicdop marker [--clear | --replant] [--all] or bicdop marker [PROJECT] --check or bicdop marker --set FIELD VALUE'
     }
     $state = Read-BicdopRegistry
     $active = Get-BicdopActive $state
@@ -707,21 +1150,30 @@ function Switch-BicdopProject([string]$Target) {
 }
 
 function Get-BicdopLatestRelease([object[]]$Options) {
-    if ($Options.Count -ne 1 -or $Options[0] -ne '--check') {
-        throw 'This source distribution supports update --check only. Install updates from a reviewed checkout.'
+    if ($Options.Count -ne 1 -or $Options[0] -notin '--check','--apply') {
+        throw 'Usage: bicdop update [--check | --apply]'
     }
     $installed = $ExecutionContext.SessionState.Module.Version
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Biosphir/bicdop/releases/latest' -TimeoutSec 15 -ErrorAction Stop
-    $latest = [version]'0.0.0'
-    if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v?[0-9]+\.[0-9]+\.[0-9]+$' -or
-        -not [version]::TryParse($release.tag_name.TrimStart('v'), [ref]$latest)) {
-        throw 'GitHub did not return a supported stable release tag.'
+    if ($Options[0] -eq '--apply') {
+        $root = Get-BicdopManagedRoot
+        $managed = Get-BicdopManagedModule $root $installed
+        $current = if ($managed) { $managed.Version } else { $installed }
+        $result = Install-BicdopRelease $current $root
+        if ($result.Version -gt $installed) {
+            $manifest = Join-Path $root "$($result.Version)/Bicdop.psd1"
+            Write-Host "Bicdop $($result.Version) is ready. Reopen the Bicdop launcher to use it."
+            Write-Host "For a manual PowerShell import: $manifest"
+        } else {
+            Write-Host "Bicdop $installed is up to date."
+        }
+        return
     }
-    [pscustomobject]@{ Installed = $installed.ToString(); Latest = $latest.ToString()
-        UpdateAvailable = $latest -gt $installed; Notes = $release.body }
+    $release = Get-BicdopRelease
+    [pscustomobject]@{ Installed = $installed.ToString(); Latest = $release.Version.ToString()
+        UpdateAvailable = $release.Version -gt $installed; Notes = $release.Release.body }
 }
 
-function ConvertFrom-BicdopInput([string]$Line) {
+function ConvertFrom-BicdopInput([string]$Line, [switch]$PreserveQuotes) {
     $pattern = @'
 \G\s*(?:"(?<value>[^"]*)"|'(?<value>[^']*)'|(?<value>[^\s"'|;&<>]+))(?=\s|$)
 '@
@@ -733,7 +1185,8 @@ function ConvertFrom-BicdopInput([string]$Line) {
         if (!$token.Success) {
             throw 'Invalid input. Quote paths with spaces. Enter one Bicdop command per line.'
         }
-        $token.Groups['value'].Value
+        if ($PreserveQuotes) { $token.Value.TrimStart() }
+        else { $token.Groups['value'].Value }
         $offset += $token.Length
     }
 }
@@ -742,6 +1195,7 @@ function Start-BicdopShell {
     while ($true) {
         $line = Read-Host (Get-BicdopPrompt)
         if ($null -eq $line) { return }
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
             $words = @(ConvertFrom-BicdopInput $line)
             if ($words.Count -and $words[0] -eq 'bicdop') {
@@ -749,9 +1203,14 @@ function Start-BicdopShell {
             }
             if (!$words.Count) { continue }
             if ($words[0] -in 'exit','--exit' -and $words.Count -eq 1) { return }
+            if ($words.Count -eq 4 -and $words[0] -eq 'marker' -and $words[1] -eq '--set') {
+                $words[3] = (ConvertFrom-BicdopInput $line -PreserveQuotes | Select-Object -Last 1)
+            }
             bicdop @words | Out-Host
         } catch {
             Write-Error -ErrorRecord $_ -ErrorAction Continue
+        } finally {
+            Write-Host ''
         }
     }
 }
@@ -766,7 +1225,19 @@ function bicdop {
         'scan' { Invoke-BicdopScan $options }
         'plant' { Invoke-BicdopPlant $options }
         'marker' { Invoke-BicdopMarker $options }
+        'github' { Invoke-BicdopGitHub $options }
         'run' { Invoke-BicdopRun $options }
+        'pyinstaller' { Invoke-BicdopPyInstaller $options }
+        'open' {
+            if ($options.Count -gt 1 -or ($options[0] -like '--*' -and $options[0] -ne '--workspace')) {
+                throw 'Usage: bicdop open [--workspace | PROJECT]'
+            }
+            $folder = if (!$options.Count) { Get-BicdopFolder }
+                elseif ($options[0] -eq '--workspace') {
+                    Get-BicdopFolder (Get-BicdopActive (Read-BicdopRegistry)).path
+                } else { Get-BicdopNamedFolder $options[0] }
+            Open-BicdopExplorer $folder.FullName
+        }
         'project' {
             $folder = if ($options.Count -eq 2 -and $options[0] -notlike '--*' -and $options[1] -eq '--version') {
                 $named = Get-BicdopNamedFolder $options[0]
@@ -833,6 +1304,10 @@ function bicdop {
             if ($options.Count) { throw 'Usage: pwd' }
             (Get-Location).Path
         }
+        'flush' {
+            if ($options.Count) { throw 'Usage: flush' }
+            Clear-Host
+        }
         { $_ -in 'exit','--exit' } {
             if ($options.Count) { throw 'Usage: exit' }
         }
@@ -848,21 +1323,40 @@ bicdop workspace [--set | --find | --goto | --use NAME-OR-NUMBER]
 bicdop scan [PATH | --all | --git | --project NAME | --new NAME]
 bicdop plant [1,3,5 | --all]             --all plants direct subfolders of the current folder
 bicdop marker [--clear | --replant] [--all]
+bicdop marker [PROJECT] --check         Show the contents of the .bicdop marker
+bicdop github --status                  Check the working tree and compare with GitHub
+bicdop github --stage FILE [...]        Stage selected paths
+bicdop github --stage --all             Stage new, modified, and deleted files
+bicdop github --diff [--staged]         Show unstaged or staged changes
+bicdop github --unstage FILE [...]      Remove selected changes from staging
+bicdop github --unstage --all           Remove all changes from staging
+bicdop github --commit "MESSAGE"        Commit staged changes
+bicdop github --fetch                   Refresh refs from origin
+bicdop github --pull                    Fast-forward the current branch from origin
+bicdop github --push                    Push the current branch to origin
+bicdop github --publish                 Stage all changes, auto-commit, and push normally
+bicdop github --push --force            Legacy alias for github --publish
+bicdop marker --set FIELD VALUE         Save a value in the current .bicdop (quote text)
 bicdop projects                          List registered projects one level below the active workspace
 bicdop show                              List direct subfolders of the active workspace
 bicdop switch NUMBER-OR-NAME
 bicdop run [FOLDER-NAME] [--detach]      Run the main file, replacing the previous detached run in this session
 bicdop run --set FILE
+bicdop pyinstaller [PROJECT]            Build using the command stored in .bicdop
+bicdop pyinstaller --set "COMMAND-LINE" Save a full build command without running it
 bicdop project --main                   Show the main file saved in .bicdop
 bicdop project --list                   List direct files and folders in the current directory
 bicdop project --version [VERSION]      Refresh, show, or set the project version
 bicdop project PROJECT --version        Refresh and show a named workspace project version
 bicdop version                          Compare installed and latest stable versions
-bicdop update --check
+bicdop update --check                   Check the latest stable GitHub release
+bicdop update --apply                   Download and install the latest compatible release
 bicdop mkdir PATH                        Create a directory
 bicdop cd PATH                           Change directory (cd.. moves up one level)
 bicdop li [PATH]                         List directory contents (also ls or dir)
 bicdop pwd                               Print the current directory
+bicdop flush                             Clear the terminal display
+bicdop open [--workspace | PROJECT]      Open a folder in File Explorer
 
 Inside Bicdop, omit the 'bicdop' prefix. Type 'exit' to return to PowerShell.
 Quote paths or names that contain spaces.

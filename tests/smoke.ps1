@@ -28,7 +28,7 @@ function Set-TestConfig($CurrentModule) {
         function script:Confirm-Bicdop($Message) { return $Message -notlike 'Assign*' }
         function script:Get-BicdopDrives { return $script:TestRoot }
         function script:Invoke-RestMethod {
-            return @{ tag_name = 'v0.5.10'; body = 'Example release notes' }
+            return @{ tag_name = 'v0.7.5'; body = 'Example release notes' }
         }
     } $registry $root
 }
@@ -113,8 +113,8 @@ try {
     $update = bicdop update --check
     $version = bicdop version
     Assert-That ($version.Installed -eq $update.Installed -and $version.Latest -eq $update.Latest -and $version.UpdateAvailable) 'Version did not match update --check'
-    Assert-That ($update.Installed -eq '0.5.9' -and $update.UpdateAvailable) 'Update check returned the wrong version'
-    Assert-Throws { bicdop update --yes } 'supports update --check only'
+    Assert-That ($update.Installed -eq '0.7.4' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    Assert-Throws { bicdop update --yes } 'Usage: bicdop update'
     $projectMarker = Join-Path (Get-Location).Path '.bicdop'
     $originalId = (Get-Content -LiteralPath $projectMarker -Raw | ConvertFrom-Json).id
     bicdop marker --replant
@@ -231,6 +231,62 @@ try {
     bicdop run --set 'Preview Page.htm'
     Set-Location $root
     Assert-That ((bicdop run 'Nested') -eq $customHtml) 'Named run did not open the configured HTML entry point'
+    & (Get-Module Bicdop) {
+        function script:Open-BicdopExplorer {
+            param($Path)
+            $Path
+        }
+    }
+    Assert-That ((bicdop open) -eq $root) 'Open did not use the current folder'
+    Assert-That ((bicdop open --workspace) -eq $moved) 'Open did not use the active workspace'
+    Assert-That ((bicdop open 'Nested') -eq $direct) 'Open did not resolve the named project'
+    Assert-That ((Get-Location).Path -eq $root) 'Open changed the current location'
+    Set-Location $direct
+    $compile = 'python -m PyInstaller --name "A Project" main.py'
+    bicdop pyinstaller --set $compile
+    $gitForTest = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($gitForTest) {
+        Assert-Throws { bicdop github --status } 'not the root of a Git repository'
+    }
+    if ($gitForTest) {
+        & $gitForTest.Source -C $direct init --quiet
+        if ($LASTEXITCODE) { throw 'Fixture Git init failed' }
+        & $gitForTest.Source -C $direct remote add origin 'https://test-user:dummy-password@github.com/example/sample.git'
+        if ($LASTEXITCODE) { throw 'Fixture Git remote failed' }
+    }
+    bicdop marker --replant
+    $preset = Get-Content -LiteralPath (Join-Path $direct '.bicdop') -Raw | ConvertFrom-Json
+    Assert-That ($preset.pyinstaller_command -ceq $compile) 'Replant lost the PyInstaller preset'
+    if ($gitForTest) {
+        Assert-That ($preset.github_url -ceq 'https://github.com/example/sample') 'Marker did not store the credential-free GitHub link'
+        & $gitForTest.Source -C $direct remote set-url origin 'git@github.com:example/renamed.git'
+        bicdop marker --replant
+        Assert-That (((bicdop marker --check) | ConvertFrom-Json).github_url -ceq 'https://github.com/example/renamed') 'Replant did not refresh the SSH remote link'
+    }
+    bicdop marker --set label '"007"'
+    bicdop marker --set revision 7
+    bicdop marker --set archived false
+    bicdop marker --set note null
+    Assert-Throws { bicdop marker --set label unquoted } 'Put text values in quotes'
+    Assert-Throws { bicdop marker --set schema 2 } 'Bicdop manages'
+    bicdop marker --replant
+    $typed = bicdop marker --check | ConvertFrom-Json
+    Assert-That (($typed.PSObject.Properties.Name[0..2] -join ',') -eq 'schema,id,workspace') 'Marker identity fields were not written first'
+    Assert-That ($typed.label -is [string] -and $typed.label -ceq '007') 'Quoted value was not preserved through replant'
+    Assert-That ($typed.revision -is [ValueType] -and $typed.revision -eq 7) 'Unquoted number was stored as text'
+    Assert-That ($typed.archived -is [bool] -and !$typed.archived) 'Boolean value was not stored'
+    Assert-That ($typed.PSObject.Properties.Name -contains 'note' -and $null -eq $typed.note) 'Null value was not stored'
+    $localMarker = bicdop marker --check
+    Assert-That (($localMarker | ConvertFrom-Json).pyinstaller_command -ceq $compile) 'Marker check missed a stored field'
+    Set-Location $root
+    Assert-That ((bicdop marker 'Nested' --check) -ceq $localMarker) 'Named marker check did not return the same marker'
+    Assert-That ((Get-Location).Path -eq $root) 'Named marker check changed the current location'
+    Assert-Throws { bicdop marker --check } 'No .bicdop marker'
+    Set-Location $direct
+    $argsFromPreset = @(& (Get-Module Bicdop) { param($line) ConvertTo-BicdopPyInstallerArgs $line } $compile)
+    Assert-That ($argsFromPreset.Count -eq 3 -and $argsFromPreset[1] -ceq 'A Project') 'PyInstaller did not preserve quoted arguments'
+    Assert-Throws { bicdop pyinstaller --set 'cmd.exe /c dir' } 'Enter a full command'
+    Set-Location $root
     bicdop marker --clear --all
     Assert-That (!(Test-Path -LiteralPath (Join-Path $nested '.bicdop'))) 'Bulk clear skipped nested child'
     Assert-That (Test-Path -LiteralPath (Join-Path $moved '.bicdop-workspace')) 'Bulk clear removed workspace marker'
@@ -249,6 +305,10 @@ try {
     Assert-That (!(Test-Path -LiteralPath (Join-Path $root 'skipped'))) 'Exit did not stop the shell'
     Assert-Throws { & (Get-Module Bicdop) { ConvertFrom-BicdopInput 'pwd; Get-Date' } } 'Invalid input'
     Assert-That ((Get-Item Function:prompt).ScriptBlock.ToString() -eq $originalPrompt) 'The shell changed the PowerShell prompt'
+    & (Get-Module Bicdop) {
+        function script:Clear-Host { 'cleared' }
+    }
+    Assert-That ((bicdop flush) -eq 'cleared') 'Flush did not clear the host'
     'Bicdop smoke tests passed.'
 } finally {
     Set-Location $original

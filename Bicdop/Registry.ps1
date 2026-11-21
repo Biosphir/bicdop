@@ -65,7 +65,15 @@ function Save-BicdopRegistry($State) {
 }
 
 function Write-BicdopMarker([string]$Path, $Marker) {
-    $json = ConvertTo-Json -InputObject $Marker
+    $identityFields = 'schema', 'id', 'workspace'
+    $ordered = [ordered]@{}
+    foreach ($field in $identityFields) {
+        if ($Marker.Contains($field)) { $ordered[$field] = $Marker[$field] }
+    }
+    foreach ($field in $Marker.Keys | Where-Object { $_ -notin $identityFields } | Sort-Object) {
+        $ordered[$field] = $Marker[$field]
+    }
+    $json = ConvertTo-Json -InputObject $ordered
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     $stream = [IO.File]::Open($Path, 'CreateNew', 'Write', 'None')
     try {

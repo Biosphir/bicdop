@@ -1,7 +1,9 @@
 {
-  "id": "53e26233-e1a1-4bfd-aff6-31e6e3ee2189",
+  "pyinstaller_command": "",
   "workspace": "840241a7-db26-4a87-8875-ae5d4e37cfe0",
   "schema": 1,
-  "version": "",
-  "main_file": null
+  "id": "53e26233-e1a1-4bfd-aff6-31e6e3ee2189",
+  "github_url": "https://github.com/Biosphir/bicdop",
+  "main_file": null,
+  "version": ""
 }
