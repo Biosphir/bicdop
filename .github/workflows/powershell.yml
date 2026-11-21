@@ -1,0 +1,28 @@
+name: Windows PowerShell compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.shell }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Bicdop smoke test
+        shell: ${{ matrix.shell }}
+        run: |
+          $PSVersionTable.PSVersion
+          if ($PSVersionTable.PSVersion.Major -ne ${{ matrix.shell == 'powershell' && 5 || 7 }}) {
+            throw 'Unexpected PowerShell version on this runner.'
+          }
+          .\tests\smoke.ps1
