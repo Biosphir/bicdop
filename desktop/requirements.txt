@@ -1,0 +1,3 @@
+PySide6>=6.8,<7
+pywinpty>=3,<4; sys_platform == "win32"
+pexpect>=4.9,<5; sys_platform != "win32"

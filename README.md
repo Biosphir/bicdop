@@ -4,6 +4,10 @@ Bicdop (BIOSPHIR Integrated Command & Development Operations Platform) is a
 command-line application by BIOSPHIR. This development baseline provides the
 entry point and built-in usage help. Commands will be added individually.
 
+## Desktop terminal
+
+The desktop MVP is available from source in [desktop/](desktop/README.md).
+
 ## Install for local development
 
 From the repository root in PowerShell:
