@@ -1,4 +1,4 @@
-$script:BicdopReleaseUri = 'https://api.github.com/repos/Biosphir/bicdop/releases/latest'
+﻿$script:BicdopReleaseUri = 'https://api.github.com/repos/Biosphir/bicdop/releases/latest'
 $script:BicdopModuleFiles = @('Bicdop.psd1', 'Bicdop.psm1', 'Bicdop.Format.ps1xml', 'Registry.ps1', 'Update.ps1')
 
 function Get-BicdopManagedRoot {
@@ -57,7 +57,9 @@ function Install-BicdopRelease([version]$Current, [string]$Root) {
     [void][IO.Directory]::CreateDirectory($module)
     try {
         $archivePath = Join-Path $stage 'module.zip'
+        Write-Host "Downloading $name..."
         Invoke-WebRequest -UseBasicParsing -Uri $expectedUrl -OutFile $archivePath -TimeoutSec 15 -ErrorAction Stop
+        Write-Host "Verifying $name..."
         if ((Get-Item -LiteralPath $archivePath).Length -ne $asset.size -or
             (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ine $expectedHash) {
             throw 'Bicdop download failed SHA-256 verification.'
@@ -81,6 +83,7 @@ function Install-BicdopRelease([version]$Current, [string]$Root) {
             $data.GUID -ne '0ca61971-3ba1-441f-b33e-fce8d04b376a') {
             throw 'The downloaded manifest does not match the Bicdop release.'
         }
+        Write-Host "Installing Bicdop $($latest.Version)..."
         try {
             [IO.Directory]::Move($module, $destination)
         } catch [IO.IOException] {

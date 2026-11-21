@@ -5,7 +5,7 @@ $script:ScanRows = @()
 $script:ProjectRows = @()
 $script:ListedWorkspace = $null
 $script:DetachedRuns = @{}
-function Get-BicdopPrompt {
+function Get-BicdopPrompt([switch]$Display) {
     $location = Get-Location
     $workspaceLabel = ''
     try {
@@ -16,7 +16,95 @@ function Get-BicdopPrompt {
     } catch {
         # Keep the shell usable if the registry cannot be read.
     }
+    if ($Display) {
+        if ($Host.UI.SupportsVirtualTerminal) {
+            $esc = [char]27
+            Write-Host "$esc[38;2;139;79;224mbicdop$esc[39m" -NoNewline
+        } else {
+            Write-Host 'bicdop' -ForegroundColor Magenta -NoNewline
+        }
+        if ($workspaceLabel) { Write-Host $workspaceLabel -ForegroundColor Blue -NoNewline }
+        Write-Host " [$($location.Path)] > : " -NoNewline
+        return
+    }
     "bicdop$workspaceLabel [$($location.Path)] > "
+}
+
+function Write-BicdopSyntax([string]$Text, [switch]$NoNewline) {
+    $pattern = @'
+(?<adapted>^[ \t]*(?:bicdop[ \t]+)?(?<native>cd\.\.|cd|dir|flush|li|ls|mkdir|ping|pwd|rmdir)(?=\s|$))|(?<quoted>"[^"\r\n]*"|'[^'\r\n]*')|(?<flag>(?<![\w-])--[A-Za-z][A-Za-z0-9-]*)
+'@
+    $offset = 0
+    foreach ($token in [regex]::Matches($Text, $pattern)) {
+        if ($token.Index -gt $offset) {
+            Write-Host $Text.Substring($offset, $token.Index - $offset) -NoNewline
+        }
+        if ($token.Groups['adapted'].Success) {
+            $native = $token.Groups['native']
+            $prefixLength = $native.Index - $token.Index
+            if ($prefixLength) { Write-Host $token.Value.Substring(0, $prefixLength) -NoNewline }
+            Write-Host $native.Value -ForegroundColor Yellow -NoNewline
+        } elseif ($token.Groups['quoted'].Success) {
+            Write-Host $token.Value -ForegroundColor Blue -NoNewline
+        } elseif ($Host.UI.SupportsVirtualTerminal) {
+            $esc = [char]27
+            Write-Host "$esc[38;2;108;108;108m$($token.Value)$esc[39m" -NoNewline
+        } else {
+            Write-Host $token.Value -ForegroundColor DarkGray -NoNewline
+        }
+        $offset = $token.Index + $token.Length
+    }
+    Write-Host $Text.Substring($offset) -NoNewline:$NoNewline
+}
+
+function Set-BicdopSubmittedInputColor($RawUI, $Start, [string]$Line) {
+    if (!$Start -or !$Line -or $Line -match '[\x00-\x1F]') { return }
+    $end = $RawUI.CursorPosition
+    if ($end.Y -ne ($Start.Y + 1) -or
+        ($Start.X + $RawUI.LengthInBufferCells($Line)) -ge $RawUI.BufferSize.Width) { return }
+    try {
+        $RawUI.CursorPosition = $Start
+        Write-BicdopSyntax $Line -NoNewline
+    } finally {
+        $RawUI.CursorPosition = $end
+    }
+}
+
+function Read-BicdopConfirmation([string]$Message) {
+    Write-Host "$Message " -ForegroundColor Yellow -NoNewline
+    Read-Host
+}
+
+function Write-BicdopProjectTable {
+    begin {
+        $raw = $Host.UI.RawUI
+        $projectStart = -1
+        $workspaceStart = -1
+    }
+    process {
+        $line = [string]$_
+        $plain = $line -replace '\x1b\[[0-9;]*m', ''
+        if ($plain -match '^\s*No\.\s+Project\s+Workspace\s+Path\s+') {
+            $projectStart = $plain.IndexOf('Project', [StringComparison]::Ordinal)
+            $workspaceStart = $plain.IndexOf('Workspace', [StringComparison]::Ordinal)
+        } elseif ($projectStart -ge 0 -and $raw -and $plain.Length -gt $projectStart -and
+            $plain -notmatch '^\s*-+\s+-+') {
+            $end = $projectStart
+            $cells = $projectStart
+            while ($end -lt $plain.Length -and $cells -lt $workspaceStart) {
+                $cells += $raw.LengthInBufferCells($plain[$end])
+                $end++
+            }
+            $name = $plain.Substring($projectStart, $end - $projectStart).TrimEnd()
+            if ($name.Trim()) {
+                Write-Host $plain.Substring(0, $projectStart) -NoNewline
+                Write-Host $name -ForegroundColor Cyan -NoNewline
+                Write-Host $plain.Substring($projectStart + $name.Length)
+                return
+            }
+        }
+        Write-Host $line
+    }
 }
 
 function Get-BicdopDrives {
@@ -42,16 +130,30 @@ function Get-BicdopFolderSize([string]$Path) {
     $pending.Push($root)
     $bytes = 0L
     $partial = $false
-    while ($pending.Count) {
-        try {
-            foreach ($item in $pending.Pop().EnumerateFileSystemInfos()) {
-                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
-                if ($item -is [IO.DirectoryInfo]) { $pending.Push($item) }
-                else { $bytes += $item.Length }
+    $folders = 0
+    $displayed = $false
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        while ($pending.Count) {
+            $directory = $pending.Pop()
+            try {
+                foreach ($item in $directory.EnumerateFileSystemInfos()) {
+                    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                    if ($item -is [IO.DirectoryInfo]) { $pending.Push($item) }
+                    else { $bytes += $item.Length }
+                }
+            } catch [UnauthorizedAccessException], [IO.IOException] {
+                $partial = $true
             }
-        } catch [UnauthorizedAccessException], [IO.IOException] {
-            $partial = $true
+            $folders++
+            if ($timer.ElapsedMilliseconds -ge 500) {
+                Write-Progress -Id 10 -Activity 'Calculating folder size' -Status "$folders folders checked" -CurrentOperation $Path
+                $displayed = $true
+                $timer.Restart()
+            }
         }
+    } finally {
+        if ($displayed) { Write-Progress -Id 10 -Activity 'Calculating folder size' -Completed }
     }
     $size = if ($bytes -ge 1GB) { '{0:0.##} GB' -f ($bytes / 1GB) }
         elseif ($bytes -ge 1MB) { '{0:0.##} MB' -f ($bytes / 1MB) }
@@ -100,12 +202,15 @@ function Get-BicdopActive($State) {
 }
 
 function Confirm-Bicdop([string]$Message) {
-    return (Read-Host "$Message [y/N]") -match '^y(es)?$'
+    return (Read-BicdopConfirmation "$Message [y/N]:") -match '^y(es)?$'
 }
 
 function Register-BicdopWorkspace {
     $folder = Get-BicdopFolder
-    if (-not (Confirm-Bicdop "Register and activate workspace '$($folder.FullName)'?")) { return }
+    if (!(Confirm-Bicdop "Register and activate workspace '$($folder.FullName)'?")) {
+        Write-Host 'Workspace registration cancelled.'
+        return
+    }
     $path = Join-Path $folder.FullName '.bicdop-workspace'
     Invoke-BicdopRegistryWrite {
         param($state)
@@ -298,6 +403,11 @@ function Set-BicdopProjectField([string]$Root, [string]$Field, [object]$Value) {
         }
         $marker = Read-BicdopMarker $markerPath
         if (!$marker) { throw 'A valid .bicdop project marker is required. Run bicdop marker --replant first.' }
+        if ($Field -eq 'github_url' -and (!$marker.github_release_url -or $marker.github_release_url -ieq $marker.github_url)) {
+            $marker.github_release_url = $Value
+        } elseif ($Field -eq 'github_release_url' -and !$Value) {
+            $Value = $marker.github_url
+        }
         $marker[$Field] = $Value
         $temp = "$markerPath.$([guid]::NewGuid()).tmp"
         try {
@@ -442,6 +552,7 @@ function Stop-BicdopPreviousRun([string]$Root) {
     $previous = $script:DetachedRuns[$Root]
     if (!$previous) { return }
     if (!$previous.HasExited) {
+        Write-Host "Stopping the previous run (PID $($previous.Id))..."
         if (!$previous.CloseMainWindow() -or !$previous.WaitForExit(2000)) {
             try { $previous.Kill() }
             catch [InvalidOperationException] {
@@ -486,8 +597,8 @@ function Invoke-BicdopPyInstaller([object[]]$Options) {
     $command = if ($set) { [string]$Options[1] } else { $marker.pyinstaller_command }
     $needsPreset = !$set -and ($command -isnot [string] -or [string]::IsNullOrWhiteSpace($command))
     if ($needsPreset) {
-        $command = Read-Host "Full PyInstaller command for '$($folder.Name)' (Enter to cancel)"
-        if ([string]::IsNullOrWhiteSpace($command)) { return }
+        $command = Read-BicdopConfirmation "Full PyInstaller command for '$($folder.Name)' (Enter to cancel):"
+        if ([string]::IsNullOrWhiteSpace($command)) { Write-Host 'PyInstaller build cancelled.'; return }
     }
     $buildArgs = @(ConvertTo-BicdopPyInstallerArgs $command)
     if ($set -or $needsPreset) {
@@ -497,10 +608,12 @@ function Invoke-BicdopPyInstaller([object[]]$Options) {
     }
 
     $python = Get-BicdopPython $folder.FullName
+    Write-Host "Building '$($folder.Name)' with PyInstaller..."
     Push-Location -LiteralPath $folder.FullName -StackName BicdopPyInstaller
     try {
         & $python -m PyInstaller @buildArgs
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller exited with code $LASTEXITCODE." }
+        Write-Host "Build complete. See the PyInstaller output for the destination."
     } finally {
         Pop-Location -StackName BicdopPyInstaller
     }
@@ -529,6 +642,7 @@ function Invoke-BicdopRun([object[]]$Options) {
     $extension = [IO.Path]::GetExtension($entry)
     if ($extension -in '.html', '.htm') {
         Start-Process -FilePath $entry -ErrorAction Stop
+        Write-Host "Opened preview: $entry"
         return
     }
     $runtime = switch ($extension) {
@@ -552,6 +666,7 @@ function Invoke-BicdopRun([object[]]$Options) {
         return
     }
 
+    Write-Host "Running '$file' in '$($folder.Name)'..."
     Push-Location -LiteralPath $folder.FullName -StackName BicdopRun
     try {
         if ($extension -eq '.ps1') { & $entry }
@@ -559,6 +674,7 @@ function Invoke-BicdopRun([object[]]$Options) {
         if ($extension -ne '.ps1' -and $LASTEXITCODE -ne 0) {
             throw "Entry point exited with code $LASTEXITCODE."
         }
+        Write-Host "Run finished: $file"
     } finally {
         Pop-Location -StackName BicdopRun
     }
@@ -701,8 +817,59 @@ function Show-BicdopGitHubStatus {
     return [pscustomobject]$status
 }
 
+function Invoke-BicdopGitHubRelease([object[]]$Options) {
+    $usage = 'Usage: github --release TAG [FILE ...] | --release --view TAG | --release --upload TAG FILE [...] | --release --publish TAG'
+    if (!$Options.Count) { throw $usage }
+    $action = 'create'
+    if ($Options[0] -in '--view','--upload','--publish') {
+        $action = $Options[0].Substring(2)
+        $Options = @($Options | Select-Object -Skip 1)
+    }
+    if (!$Options.Count -or $Options[0] -notmatch '^[A-Za-z0-9_][A-Za-z0-9._/-]*$' -or
+        ($action -in 'view','publish' -and $Options.Count -ne 1) -or
+        ($action -eq 'upload' -and $Options.Count -lt 2)) {
+        throw $usage
+    }
+    $tag = $Options[0]
+    $folder = Get-BicdopFolder
+    $marker = Read-BicdopMarker (Join-Path $folder.FullName '.bicdop')
+    if (!$marker) { throw 'No valid .bicdop marker in the current folder. Enter a marked project folder first.' }
+    $target = if ($marker.github_release_url) { $marker.github_release_url } else { $marker.github_url }
+    $url = ConvertTo-BicdopGitHubUrl $target
+    if (!$url) { throw 'Set github_release_url or github_url to a valid GitHub repository URL in .bicdop.' }
+
+    $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$gh) { throw 'GitHub CLI (gh) was not found on PATH.' }
+    $repo = ([uri]$url).Host + ([uri]$url).AbsolutePath
+    $assets = @(foreach ($file in ($Options | Select-Object -Skip 1)) {
+        $item = Get-Item -LiteralPath $file -ErrorAction Stop
+        if ($item -isnot [IO.FileInfo] -or $item.FullName.Contains('#')) {
+            throw "Release assets must be files and their paths cannot contain '#': $file"
+        }
+        $item.FullName
+    })
+    $arguments = switch ($action) {
+        'create' { 'release', 'create', $tag, '--draft', '--generate-notes', '--repo', $repo, '--'; $assets }
+        'view' { 'release', 'view', $tag, '--repo', $repo }
+        'upload' { 'release', 'upload', $tag, '--repo', $repo, '--'; $assets }
+        'publish' { 'release', 'edit', $tag, '--draft=false', '--repo', $repo }
+    }
+    Write-Host "GitHub Release: $action $tag in $repo..."
+    & $gh.Source @arguments
+    if ($LASTEXITCODE -ne 0) { throw "GitHub release $action failed (exit code $LASTEXITCODE)." }
+    switch ($action) {
+        'create' { Write-Host "Draft $tag created. Use github --release --view $tag to review it." }
+        'upload' { Write-Host "Assets uploaded to $tag." }
+        'publish' { Write-Host "Release $tag published." }
+    }
+}
+
 function Invoke-BicdopGitHub([object[]]$Options) {
     $action = $Options[0]
+    if ($action -eq '--release') {
+        Invoke-BicdopGitHubRelease @($Options | Select-Object -Skip 1)
+        return
+    }
     $quickPush = ($action -eq '--publish' -and $Options.Count -eq 1) -or
         ($action -eq '--push' -and $Options.Count -eq 2 -and $Options[1] -eq '--force')
     if ($quickPush) { $action = '--push' }
@@ -787,7 +954,19 @@ function Invoke-BicdopGitHub([object[]]$Options) {
         }
     }
     if ($action -eq '--push') { Write-Host "Pushing $branch to origin ($reference)..." }
-    & $repository.Git -C $repository.Root @arguments
+    if ($action -eq '--diff') {
+        $shown = $false
+        & $repository.Git -C $repository.Root @arguments | ForEach-Object {
+            $shown = $true
+            $_
+        }
+        if ($LASTEXITCODE -eq 0 -and !$shown) {
+            if ($Options[1] -eq '--staged') { Write-Host 'No staged changes to show.' }
+            else { Write-Host 'No unstaged changes in tracked files. Use github --status to see new files.' }
+        }
+    } else {
+        & $repository.Git -C $repository.Root @arguments
+    }
     if ($LASTEXITCODE -ne 0) { throw "Git $($action.Substring(2)) exited with code $LASTEXITCODE." }
     if ($action -in '--stage','--unstage') {
         $staged = @(& $repository.Git -C $repository.Root diff --cached --name-only -- 2>$null)
@@ -857,9 +1036,10 @@ function Invoke-BicdopPlant([object[]]$Options) {
                 Invoke-BicdopRegistryWrite {
                     param($latest)
                     if ($id -and -not $latest.workspaces.Contains($id)) { throw 'Chosen workspace no longer exists.' }
+                    $githubUrl = [string](Get-BicdopGitHubUrl $folder.FullName)
                     $marker = @{ schema = 1; id = [guid]::NewGuid().ToString(); workspace = $id; main_file = [string](Find-BicdopMainFile $folder.FullName)
                         version = [string](Find-BicdopProjectVersion $folder.FullName)
-                        github_url = [string](Get-BicdopGitHubUrl $folder.FullName) }
+                        github_url = $githubUrl; github_release_url = $githubUrl }
                     $json = Write-BicdopMarker $path $marker
                     try {
                         $latest.projects[$marker.id] = @{ id = $marker.id; name = $folder.Name
@@ -878,6 +1058,7 @@ function Invoke-BicdopPlant([object[]]$Options) {
         }
         Write-Host "$planted planted, $skipped skipped, $errors errors."
     } elseif (-not $planned.Count) { Write-Host "0 planted, $skipped skipped, $errors errors." }
+    else { Write-Host 'Plant cancelled.' }
 }
 
 function Stage-BicdopProjectMarker($Folder, $State, [string]$WorkspaceId, [bool]$Replant) {
@@ -930,7 +1111,11 @@ function Stage-BicdopProjectMarker($Folder, $State, [string]$WorkspaceId, [bool]
             $marker.main_file = [string]$mainFile
             $marker.version = [string]$version
             $marker.pyinstaller_command = [string]$pyinstallerCommand
-            $marker.github_url = [string](Get-BicdopGitHubUrl $Folder.FullName)
+            $githubUrl = [string](Get-BicdopGitHubUrl $Folder.FullName)
+            if (!$marker.github_release_url -or $marker.github_release_url -ieq $marker.github_url) {
+                $marker.github_release_url = $githubUrl
+            }
+            $marker.github_url = $githubUrl
             $null = Write-BicdopMarker $path $marker
         }
     } catch {
@@ -965,7 +1150,7 @@ function Set-BicdopMarkerValue([string]$Field, [string]$Literal) {
     }
 
     $root = (Get-BicdopFolder).FullName
-    if ($Field -in 'main_file','version','github_url','pyinstaller_command' -and $null -ne $value) {
+    if ($Field -in 'main_file','version','github_url','github_release_url','pyinstaller_command' -and $null -ne $value) {
         if ($value -isnot [string]) { throw "Put the value of '$Field' in quotes." }
         if ($value) {
             switch ($Field) {
@@ -973,7 +1158,7 @@ function Set-BicdopMarkerValue([string]$Field, [string]$Literal) {
                 'version' {
                     if ($value -notmatch '^\d[0-9A-Za-z.!+_-]*$') { throw 'Enter a project version such as "1.2.3".' }
                 }
-                'github_url' {
+                { $_ -in 'github_url','github_release_url' } {
                     if ($value -notmatch '^https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$' -or
                         ($value.Split('/')[-1] -in '.','..')) {
                         throw 'Use a GitHub repository URL such as "https://github.com/owner/project".'
@@ -1025,7 +1210,10 @@ function Invoke-BicdopMarker([object[]]$Options) {
     if (!$targets.Count) { Write-Host 'No target folders found.'; return }
     $action = if ($replant) { 'Replant' } else { 'Clear' }
     Write-Host "Found $($targets.Count) target folder(s)."
-    if (!(Confirm-Bicdop "$action project markers in $($targets.Count) folder(s) under '$root'?")) { return }
+    if (!(Confirm-Bicdop "$action project markers in $($targets.Count) folder(s) under '$root'?")) {
+        Write-Host "$action cancelled."
+        return
+    }
 
     $changes = [System.Collections.Generic.List[hashtable]]::new()
     $failed = 0
@@ -1130,7 +1318,7 @@ function Switch-BicdopProject([string]$Target) {
         $selected = @($projects | Where-Object { $_.name -eq $Target })
         if ($selected.Count -gt 1) {
             Show-BicdopProjects -IncludeNested | Format-Table -AutoSize | Out-Host
-            $value = Read-Host 'More than one project matches. Enter its displayed number or press Enter to cancel'
+            $value = Read-BicdopConfirmation 'More than one project matches. Enter its displayed number or press Enter to cancel:'
             if (-not $value) { return }
             if ($value -notmatch '^[1-9][0-9]{0,8}$' -or [int]$value -gt $script:ProjectRows.Count -or
                 $script:ProjectRows[[int]$value - 1].name -ne $Target) { throw 'Choose a displayed number for a matching project.' }
@@ -1154,6 +1342,7 @@ function Get-BicdopLatestRelease([object[]]$Options) {
         throw 'Usage: bicdop update [--check | --apply]'
     }
     $installed = $ExecutionContext.SessionState.Module.Version
+    Write-Host 'Checking the latest stable Bicdop release...'
     if ($Options[0] -eq '--apply') {
         $root = Get-BicdopManagedRoot
         $managed = Get-BicdopManagedModule $root $installed
@@ -1191,28 +1380,154 @@ function ConvertFrom-BicdopInput([string]$Line, [switch]$PreserveQuotes) {
     }
 }
 
+function Get-BicdopErrorHint([string[]]$Words, [string]$Message) {
+    if ($Message -like 'Usage:*') { return 'Use help to see the supported command forms.' }
+    if ($Message -match 'No active workspace') { return 'Run workspace to list workspaces, or workspace --set from the workspace root.' }
+    if ($Message -match 'No valid \.bicdop|regular \.bicdop|No \.bicdop marker') {
+        return 'Run plant from the project root. If the marker already exists and is invalid, use marker --replant.'
+    }
+    if ($Message -match 'not found on PATH') { return 'Install the tool named above, add it to PATH, and reopen Bicdop.' }
+    if ($Message -match 'No main file|Entry point must') { return 'Use project --list to find the file, then run --set FILE.' }
+    if ($Message -like 'Invalid input.*') { return 'Use one command per line and quote paths or names with spaces.' }
+
+    switch ($Words[0]) {
+        'github' {
+            if ($Words[1] -eq '--release') {
+                return 'Check gh auth status in PowerShell, then check github_release_url and the asset paths. If the draft exists, use github --release --view TAG or --upload TAG FILE.'
+            }
+            if ($Words[1] -eq '--commit') {
+                return 'Use github --status to check staging. If Git asks for your identity, configure user.name and user.email in PowerShell.'
+            }
+            return 'Read the Git message above. Use github --status to check your branch and staging. If GitHub has newer commits, fetch and review before retrying.'
+        }
+        'pyinstaller' { return 'Read the build error above. Verify PyInstaller in the project Python environment and check the saved .spec or .py path.' }
+        'run' { return 'Check project --main and the runtime output above. Check that the project dependencies are installed.' }
+        { $_ -in 'update','version' } { return 'Check GitHub connectivity and run update --check. If a package fails verification, keep the installed copy.' }
+        'switch' { return 'Run projects to see the registered project names and current row numbers.' }
+        { $_ -in 'workspace','scan','show','projects' } { return 'Check that the workspace folder is accessible. Use workspace to see registered workspaces.' }
+        { $_ -in 'cd','cd..','open','li','ls','dir','mkdir','rmdir','plant','marker','project' } {
+            return 'Check the target folder and your access to it. Quote paths containing spaces.'
+        }
+        default { return 'Type help for command syntax or help errors for common fixes.' }
+    }
+}
+
 function Start-BicdopShell {
-    while ($true) {
-        $line = Read-Host (Get-BicdopPrompt)
-        if ($null -eq $line) { return }
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try {
-            $words = @(ConvertFrom-BicdopInput $line)
-            if ($words.Count -and $words[0] -eq 'bicdop') {
-                $words = @($words | Select-Object -Skip 1)
+    $rawUI = $Host.UI.RawUI
+    $interactiveConsole = $Host.Name -eq 'ConsoleHost' -and $rawUI -and
+        ![Console]::IsInputRedirected -and ![Console]::IsOutputRedirected
+    $warningColor = if ($Host.PrivateData) { $Host.PrivateData.PSObject.Properties['WarningForegroundColor'] }
+    $previousWarning = if ($warningColor) { $warningColor.Value }
+    try {
+        if ($warningColor) { $warningColor.Value = [ConsoleColor]::Yellow }
+        while ($true) {
+            Get-BicdopPrompt -Display
+            $start = if ($interactiveConsole) { $rawUI.CursorPosition }
+            $line = Read-Host
+            if ($null -eq $line) { return }
+            if ($interactiveConsole) {
+                try { Set-BicdopSubmittedInputColor $rawUI $start $line }
+                catch { Write-Verbose 'The terminal could not recolor the submitted line.' }
             }
-            if (!$words.Count) { continue }
-            if ($words[0] -in 'exit','--exit' -and $words.Count -eq 1) { return }
-            if ($words.Count -eq 4 -and $words[0] -eq 'marker' -and $words[1] -eq '--set') {
-                $words[3] = (ConvertFrom-BicdopInput $line -PreserveQuotes | Select-Object -Last 1)
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $words = @()
+            try {
+                $words = @(ConvertFrom-BicdopInput $line)
+                if ($words.Count -and $words[0] -eq 'bicdop') {
+                    $words = @($words | Select-Object -Skip 1)
+                }
+                if (!$words.Count) { continue }
+                if ($words[0] -in 'exit','--exit' -and $words.Count -eq 1) { return }
+                if ($words.Count -eq 4 -and $words[0] -eq 'marker' -and $words[1] -eq '--set') {
+                    $words[3] = (ConvertFrom-BicdopInput $line -PreserveQuotes | Select-Object -Last 1)
+                }
+                if ($words[0] -in 'help','--help') {
+                    $help = bicdop @words
+                    if ($words[1] -eq 'errors') { Write-Host $help -ForegroundColor Red }
+                    else { foreach ($row in $help -split '\r?\n') { Write-BicdopSyntax $row } }
+                } elseif ($words[0] -in 'projects','show','scan') {
+                    bicdop @words | Out-String -Stream | Write-BicdopProjectTable
+                } else {
+                    bicdop @words | Out-Host
+                }
+            } catch {
+                $message = $_.Exception.Message
+                Write-Host "Error: $message" -ForegroundColor Red
+                Write-Host ("Try: " + (Get-BicdopErrorHint $words $message)) -ForegroundColor Red
+            } finally {
+                Write-Host ''
             }
-            bicdop @words | Out-Host
-        } catch {
-            Write-Error -ErrorRecord $_ -ErrorAction Continue
-        } finally {
-            Write-Host ''
+        }
+    } finally {
+        if ($warningColor) { $warningColor.Value = $previousWarning }
+    }
+}
+
+function Remove-BicdopFolder([object[]]$Options) {
+    if ($Options.Count -notin 1,2 -or
+        ($Options.Count -eq 2 -and $Options[1] -ne '--recursive')) {
+        throw 'Usage: rmdir PATH [--recursive]'
+    }
+    $folder = Get-BicdopFolder $Options[0]
+    $path = $folder.FullName
+    $current = Get-Location
+    if (!$folder.Parent -or ($current.Provider.Name -eq 'FileSystem' -and (Test-BicdopUnder $current.ProviderPath $path))) {
+        throw 'Cannot delete a drive root, the current folder, or one of its parent folders.'
+    }
+    for ($parent = $folder.Parent; $parent; $parent = $parent.Parent) {
+        if ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Cannot delete through a symlink or junction: $($parent.FullName)"
         }
     }
+    $recursive = $Options.Count -eq 2
+    if (!$recursive -and ($folder.EnumerateFileSystemInfos() | Select-Object -First 1)) {
+        throw 'The folder is not empty. Add --recursive if you intend to delete its contents.'
+    }
+    $target = if ($recursive) { "folder '$path' and everything inside it" } else { "folder '$path'" }
+    if (!(Confirm-Bicdop "Permanently delete $target?")) {
+        Write-Host 'Folder deletion cancelled.'
+        return
+    }
+    $confirmed = Get-BicdopFolder $path
+    if (!$confirmed.FullName.Equals($path, $script:PathComparison)) { throw 'The deletion target changed.' }
+    for ($parent = $confirmed.Parent; $parent; $parent = $parent.Parent) {
+        if ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Cannot delete through a symlink or junction: $($parent.FullName)"
+        }
+    }
+    if ($recursive) {
+        Write-Host "Checking the folder before deleting it..."
+        $pending = [Collections.Generic.Stack[IO.DirectoryInfo]]::new()
+        $pending.Push($confirmed)
+        while ($pending.Count) {
+            foreach ($entry in $pending.Pop().EnumerateDirectories()) {
+                if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    throw "The folder contains a symlink or junction: $($entry.FullName). Remove the link separately before retrying."
+                }
+                $pending.Push($entry)
+            }
+        }
+        Write-Host "Deleting '$path' and its contents..."
+    }
+    [IO.Directory]::Delete($confirmed.FullName, $recursive)
+    Write-Host "Deleted folder: $path"
+}
+
+function Invoke-BicdopPing([object[]]$Options) {
+    $count = 4
+    if ($Options.Count -notin 1,3 -or
+        ($Options.Count -eq 3 -and ($Options[1] -ne '--count' -or
+            ![int]::TryParse([string]$Options[2], [ref]$count) -or $count -lt 1))) {
+        throw 'Usage: ping HOST [--count NUMBER]'
+    }
+    $target = [string]$Options[0]
+    if ($target -match '^[-/]' -or [uri]::CheckHostName($target) -eq [UriHostNameType]::Unknown) {
+        throw 'Enter a hostname or IP address, such as example.com or 127.0.0.1.'
+    }
+    $pingExe = Join-Path ([Environment]::GetFolderPath('System')) 'ping.exe'
+    Write-Host "Pinging $target ($count requests)..."
+    & $pingExe -n $count $target
+    if ($LASTEXITCODE -ne 0) { throw "Ping to '$target' failed. Check the host and your connection." }
 }
 
 function bicdop {
@@ -1228,6 +1543,8 @@ function bicdop {
         'github' { Invoke-BicdopGitHub $options }
         'run' { Invoke-BicdopRun $options }
         'pyinstaller' { Invoke-BicdopPyInstaller $options }
+        'rmdir' { Remove-BicdopFolder $options }
+        'ping' { Invoke-BicdopPing $options }
         'open' {
             if ($options.Count -gt 1 -or ($options[0] -like '--*' -and $options[0] -ne '--workspace')) {
                 throw 'Usage: bicdop open [--workspace | PROJECT]'
@@ -1237,6 +1554,7 @@ function bicdop {
                     Get-BicdopFolder (Get-BicdopActive (Read-BicdopRegistry)).path
                 } else { Get-BicdopNamedFolder $options[0] }
             Open-BicdopExplorer $folder.FullName
+            Write-Host "File Explorer target: $($folder.FullName)"
         }
         'project' {
             $folder = if ($options.Count -eq 2 -and $options[0] -notlike '--*' -and $options[1] -eq '--version') {
@@ -1253,7 +1571,9 @@ function bicdop {
                 throw 'Usage: bicdop project [--main | --list | --version [VERSION]] or bicdop project PROJECT --version'
             }
             if ($options[0] -eq '--list') {
-                Get-ChildItem -LiteralPath $folder.FullName -Force -ErrorAction Stop
+                $items = @(Get-ChildItem -LiteralPath $folder.FullName -Force -ErrorAction Stop)
+                if (!$items.Count) { Write-Host 'The project folder is empty.' }
+                $items
                 return
             }
             $marker = Read-BicdopMarker (Join-Path $folder.FullName '.bicdop')
@@ -1298,7 +1618,9 @@ function bicdop {
             if ($options.Count -gt 1) { throw 'Usage: li [PATH]' }
             $target = if ($options.Count) { $options[0] } else { '.' }
             $folder = Get-BicdopFolder $target
-            Get-ChildItem -LiteralPath $folder.FullName -ErrorAction Stop
+            $items = @(Get-ChildItem -LiteralPath $folder.FullName -ErrorAction Stop)
+            if (!$items.Count) { Write-Host 'No visible files or folders.' }
+            $items
         }
         'pwd' {
             if ($options.Count) { throw 'Usage: pwd' }
@@ -1317,6 +1639,23 @@ function bicdop {
             Get-BicdopLatestRelease @('--check')
         }
         { $_ -in 'help','--help' } {
+            if ($options.Count -eq 1 -and $options[0] -eq 'errors') {
+                @'
+Common fixes
+
+Workspace missing: use workspace to list registrations or workspace --set at the root.
+Marker missing: run plant at the project root. Use marker --check to inspect a marker.
+Main file missing: use project --list, then run --set FILE from the project root.
+Build failed: read the first PyInstaller error and check dependencies, the preset, and the .spec.
+Push rejected: run github --status and github --fetch. Resolve diverged branches before retrying.
+Nothing to commit: use github --status and github --stage FILE to select changes.
+Release failed: check gh auth status in PowerShell, then the release repository, tag, and assets.
+Update failed: use update --check. Installing requires a compatible module ZIP that passes verification.
+Paths with spaces: wrap the complete path or name in quotes.
+'@
+                return
+            }
+            if ($options.Count) { throw 'Usage: help [errors]' }
             @'
 bicdop                                   Start the interactive Bicdop shell
 bicdop workspace [--set | --find | --goto | --use NAME-OR-NUMBER]
@@ -1336,6 +1675,10 @@ bicdop github --pull                    Fast-forward the current branch from ori
 bicdop github --push                    Push the current branch to origin
 bicdop github --publish                 Stage all changes, auto-commit, and push normally
 bicdop github --push --force            Legacy alias for github --publish
+bicdop github --release TAG [FILE ...]  Create a draft GitHub Release
+bicdop github --release --view TAG     Review a release
+bicdop github --release --upload TAG FILE [...]  Attach files to a release
+bicdop github --release --publish TAG  Publish a GitHub Release draft
 bicdop marker --set FIELD VALUE         Save a value in the current .bicdop (quote text)
 bicdop projects                          List registered projects one level below the active workspace
 bicdop show                              List direct subfolders of the active workspace
@@ -1352,6 +1695,8 @@ bicdop version                          Compare installed and latest stable vers
 bicdop update --check                   Check the latest stable GitHub release
 bicdop update --apply                   Download and install the latest compatible release
 bicdop mkdir PATH                        Create a directory
+bicdop rmdir PATH [--recursive]          Delete a directory after confirmation
+bicdop ping HOST [--count NUMBER]        Send ICMP echo requests
 bicdop cd PATH                           Change directory (cd.. moves up one level)
 bicdop li [PATH]                         List directory contents (also ls or dir)
 bicdop pwd                               Print the current directory
@@ -1359,7 +1704,7 @@ bicdop flush                             Clear the terminal display
 bicdop open [--workspace | PROJECT]      Open a folder in File Explorer
 
 Inside Bicdop, omit the 'bicdop' prefix. Type 'exit' to return to PowerShell.
-Quote paths or names that contain spaces.
+Quote paths or names that contain spaces. Type 'help errors' for recovery steps.
 '@
         }
         default { throw "Unknown Bicdop command '$command'. Run bicdop help." }

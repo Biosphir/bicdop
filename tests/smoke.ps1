@@ -28,7 +28,7 @@ function Set-TestConfig($CurrentModule) {
         function script:Confirm-Bicdop($Message) { return $Message -notlike 'Assign*' }
         function script:Get-BicdopDrives { return $script:TestRoot }
         function script:Invoke-RestMethod {
-            return @{ tag_name = 'v0.7.5'; body = 'Example release notes' }
+            return @{ tag_name = 'v0.7.15'; body = 'Example release notes' }
         }
     } $registry $root
 }
@@ -36,11 +36,38 @@ function Set-TestConfig($CurrentModule) {
 try {
     Set-TestConfig $module
     Assert-That ((& (Get-Module Bicdop) { Get-BicdopPrompt }).StartsWith('bicdop [')) 'Prompt did not activate'
+    $coloredRows = @(& (Get-Module Bicdop) {
+        [pscustomobject][ordered]@{ PSTypeName='Bicdop.ScanResult'; 'No.'=1
+            Project='Example Project'; Workspace='Example'; Path='C:/example'; Status='Planted'; Size='10 B' } |
+            Out-String -Stream -Width 130 | Write-BicdopProjectTable 6>&1
+    })
+    Assert-That (@($coloredRows | Where-Object { $_.MessageData.Message -eq 'Example Project' -and $_.MessageData.ForegroundColor -eq 'Cyan' }).Count -eq 1) 'Project table name was not cyan'
     $workspace = Join-Path $root 'Workspace'
     [void][IO.Directory]::CreateDirectory($workspace)
     Set-Location $workspace
     bicdop workspace --set
     Assert-That ((& (Get-Module Bicdop) { Get-BicdopPrompt }).StartsWith('bicdop Workspace [')) 'Prompt did not show active workspace'
+    $promptParts = @(& (Get-Module Bicdop) { Get-BicdopPrompt -Display 6>&1 })
+    $label = $promptParts[0].MessageData
+    if ($Host.UI.SupportsVirtualTerminal) {
+        $esc = [char]27
+        Assert-That ($label.Message -ceq "$esc[38;2;139;79;224mbicdop$esc[39m") 'Bicdop label was not purple'
+    } else {
+        Assert-That ($label.Message -eq 'bicdop' -and $label.ForegroundColor -eq 'Magenta') 'Bicdop label palette fallback failed'
+    }
+    Assert-That ($promptParts[1].MessageData.Message -eq ' Workspace' -and $promptParts[1].MessageData.ForegroundColor -eq 'Blue') 'Workspace name was not blue'
+    Assert-That ($promptParts[2].MessageData.Message -like '* > : ') 'Prompt suffix changed'
+    $colored = @(& (Get-Module Bicdop) { Write-BicdopSyntax 'marker --set field "new value"' 6>&1 })
+    $flag = $colored[1].MessageData
+    if ($Host.UI.SupportsVirtualTerminal) {
+        $esc = [char]27
+        Assert-That ($flag.Message -ceq "$esc[38;2;108;108;108m--set$esc[39m") 'Flag did not use the darker RGB color'
+    } else {
+        Assert-That ($flag.Message -ceq '--set' -and $flag.ForegroundColor -eq 'DarkGray') 'Flag palette fallback failed'
+    }
+    Assert-That (@($colored | Where-Object { $_.MessageData.Message -eq '"new value"' -and $_.MessageData.ForegroundColor -eq 'Blue' }).Count -eq 1) 'Quoted value color did not match'
+    $adapted = @(& (Get-Module Bicdop) { Write-BicdopSyntax 'bicdop ping localhost --count 1' 6>&1 })
+    Assert-That (@($adapted | Where-Object { $_.MessageData.Message -eq 'ping' -and $_.MessageData.ForegroundColor -eq 'Yellow' }).Count -eq 1) 'Adapted command was not yellow'
     Assert-That (Test-Path .bicdop-workspace) 'Workspace marker missing'
     mkdir testing-one | Out-Null
     cd testing-one
@@ -113,7 +140,7 @@ try {
     $update = bicdop update --check
     $version = bicdop version
     Assert-That ($version.Installed -eq $update.Installed -and $version.Latest -eq $update.Latest -and $version.UpdateAvailable) 'Version did not match update --check'
-    Assert-That ($update.Installed -eq '0.7.4' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    Assert-That ($update.Installed -eq '0.7.14' -and $update.UpdateAvailable) 'Update check returned the wrong version'
     Assert-Throws { bicdop update --yes } 'Usage: bicdop update'
     $projectMarker = Join-Path (Get-Location).Path '.bicdop'
     $originalId = (Get-Content -LiteralPath $projectMarker -Raw | ConvertFrom-Json).id
@@ -259,9 +286,14 @@ try {
     Assert-That ($preset.pyinstaller_command -ceq $compile) 'Replant lost the PyInstaller preset'
     if ($gitForTest) {
         Assert-That ($preset.github_url -ceq 'https://github.com/example/sample') 'Marker did not store the credential-free GitHub link'
+        Assert-That ($preset.github_release_url -ceq $preset.github_url) 'Release URL did not default to the project URL'
+        bicdop marker --set github_release_url '"https://github.com/example/releases"'
         & $gitForTest.Source -C $direct remote set-url origin 'git@github.com:example/renamed.git'
         bicdop marker --replant
         Assert-That (((bicdop marker --check) | ConvertFrom-Json).github_url -ceq 'https://github.com/example/renamed') 'Replant did not refresh the SSH remote link'
+        Assert-That (((bicdop marker --check) | ConvertFrom-Json).github_release_url -ceq 'https://github.com/example/releases') 'Replant changed the separate release repository'
+        bicdop marker --set github_release_url null
+        Assert-That (((bicdop marker --check) | ConvertFrom-Json).github_release_url -ceq 'https://github.com/example/renamed') 'Clearing the release override did not restore the default'
     }
     bicdop marker --set label '"007"'
     bicdop marker --set revision 7
@@ -309,6 +341,32 @@ try {
         function script:Clear-Host { 'cleared' }
     }
     Assert-That ((bicdop flush) -eq 'cleared') 'Flush did not clear the host'
+    $remove = Join-Path $root 'Delete Me'
+    $null = New-Item -ItemType Directory -Path $remove
+    [IO.File]::WriteAllText((Join-Path $remove 'file.txt'), 'fixture')
+    Assert-Throws { bicdop rmdir $remove } 'not empty'
+    Assert-Throws { bicdop rmdir . --recursive } 'current folder'
+    & (Get-Module Bicdop) {
+        function script:Confirm-Bicdop($Message) { $false }
+    }
+    bicdop rmdir $remove --recursive
+    Assert-That ([IO.Directory]::Exists($remove)) 'Rmdir ignored cancellation'
+    & (Get-Module Bicdop) {
+        function script:Confirm-Bicdop($Message) { $true }
+    }
+    $junctionTarget = Join-Path $root 'Junction Target'
+    $null = New-Item -ItemType Directory -Path $junctionTarget
+    $null = New-Item -ItemType Junction -Path (Join-Path $remove 'Link') -Target $junctionTarget
+    $sentinel = Join-Path $junctionTarget 'keep.txt'
+    [IO.File]::WriteAllText($sentinel, 'fixture')
+    Assert-Throws { bicdop rmdir $remove --recursive } 'contains a symlink or junction'
+    Assert-That ([IO.File]::Exists((Join-Path $remove 'file.txt')) -and [IO.File]::Exists($sentinel)) 'Rmdir modified the folder before rejecting a junction'
+    $plain = Join-Path $root 'Plain Folder'
+    $null = New-Item -ItemType Directory -Path $plain
+    [IO.File]::WriteAllText((Join-Path $plain 'file.txt'), 'fixture')
+    bicdop rmdir $plain --recursive
+    Assert-That (![IO.Directory]::Exists($plain)) 'Recursive rmdir did not delete a regular folder'
+    Assert-Throws { bicdop ping localhost --count 0 } 'Usage'
     'Bicdop smoke tests passed.'
 } finally {
     Set-Location $original

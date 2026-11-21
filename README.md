@@ -1,4 +1,4 @@
-# Bicdop 0.7.4
+# Bicdop 0.7.14
 
 ## Windows installer
 
@@ -188,3 +188,22 @@ normal Git push, which rejects non-fast-forward updates.
 Use github --diff and github --diff --staged to review changes, or use
 github --unstage FILE [...] and github --unstage --all to undo staging while
 keeping working files. Use github --status to list staged and unstaged paths.
+
+## GitHub Releases
+
+github_release_url defaults to github_url. Set a different repository with
+marker --set github_release_url "https://github.com/owner/release-repo".
+From the project root, use github --release TAG [FILE ...] to create a draft,
+github --release --view TAG to review it, and github --release --publish TAG
+to publish it. Use github --release --upload TAG FILE [...] to add assets
+without replacing existing assets. GitHub CLI (gh) must be signed in.
+
+## Errors and feedback
+
+Use help errors for common fixes. In the Bicdop shell, errors show the
+original message and a suggested next step. Long operations display progress
+or stream their tool output. Short commands show the result directly.
+
+Use rmdir PATH to delete an empty folder after confirmation, or add
+--recursive to include its contents. Recursive deletion stops if a directory symlink or junction is found. Use ping HOST to test connectivity,
+or ping HOST --count NUMBER to send a specific number of requests.
