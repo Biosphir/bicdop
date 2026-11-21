@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <ViewDefinitions>
+    <View>
+      <Name>Bicdop scan results</Name>
+      <ViewSelectedBy><TypeName>Bicdop.ScanResult</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>No.</Label><Width>5</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Project</Label><Width>18</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Workspace</Label><Width>15</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Path</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Status</Label><Width>11</Width></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <Wrap/>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>No.</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Project</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Workspace</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Path</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Status</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+  </ViewDefinitions>
+</Configuration>
