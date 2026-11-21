@@ -75,8 +75,9 @@ try {
     Assert-That (Test-Path (Join-Path $scan[2].Path '.bicdop')) 'Third selected row not planted'
     bicdop plant --all
     Assert-That (Test-Path (Join-Path $scan[1].Path '.bicdop')) 'Plant all did not plant remaining row'
-    $outsideMarker = Get-Content (Join-Path $outside '.bicdop') -Raw | ConvertFrom-Json
-    Assert-That ($null -eq $outsideMarker.workspace) 'Outside project automatically associated'
+    $outsideJson = Get-Content (Join-Path $outside '.bicdop') -Raw
+    $outsideMarker = $outsideJson | ConvertFrom-Json
+    Assert-That ($null -eq $outsideMarker.workspace) "Outside project automatically associated. Marker: $outsideJson"
     Assert-Throws { bicdop scan --new } 'Usage'
     Assert-Throws { bicdop plant --all } 'No current'
     $known = @(bicdop projects)
