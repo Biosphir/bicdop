@@ -18,11 +18,21 @@ jobs:
         shell: [powershell, pwsh]
     steps:
       - uses: actions/checkout@v4
-      - name: Run Bicdop smoke test
-        shell: ${{ matrix.shell }}
+      - name: Run on Windows PowerShell 5.1
+        if: matrix.shell == 'powershell'
+        shell: powershell
         run: |
           $PSVersionTable.PSVersion
-          if ($PSVersionTable.PSVersion.Major -ne ${{ matrix.shell == 'powershell' && 5 || 7 }}) {
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw 'Unexpected PowerShell version on this runner.'
+          }
+          .\tests\smoke.ps1
+      - name: Run on PowerShell 7
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          $PSVersionTable.PSVersion
+          if ($PSVersionTable.PSVersion.Major -ne 7) {
             throw 'Unexpected PowerShell version on this runner.'
           }
           .\tests\smoke.ps1
