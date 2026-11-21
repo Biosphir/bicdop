@@ -11,6 +11,7 @@
           <TableColumnHeader><Label>Workspace</Label><Width>15</Width></TableColumnHeader>
           <TableColumnHeader><Label>Path</Label></TableColumnHeader>
           <TableColumnHeader><Label>Status</Label><Width>11</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Size</Label><Width>13</Width><Alignment>Right</Alignment></TableColumnHeader>
         </TableHeaders>
         <TableRowEntries>
           <TableRowEntry>
@@ -21,6 +22,53 @@
               <TableColumnItem><PropertyName>Workspace</PropertyName></TableColumnItem>
               <TableColumnItem><PropertyName>Path</PropertyName></TableColumnItem>
               <TableColumnItem><PropertyName>Status</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Size</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>Bicdop workspaces</Name>
+      <ViewSelectedBy><TypeName>Bicdop.WorkspaceRow</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>No.</Label><Width>5</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Name</Label><Width>18</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Path</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Active</Label><Width>8</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Size</Label><Width>13</Width></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <Wrap/>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>No.</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Path</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Active</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Size</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>Bicdop workspace search</Name>
+      <ViewSelectedBy><TypeName>Bicdop.WorkspaceSearchRow</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Name</Label><Width>18</Width></TableColumnHeader>
+          <TableColumnHeader><Label>FullName</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Size</Label><Width>13</Width></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <Wrap/>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>FullName</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Size</PropertyName></TableColumnItem>
             </TableColumnItems>
           </TableRowEntry>
         </TableRowEntries>
