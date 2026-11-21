@@ -246,7 +246,8 @@ function Invoke-BicdopPlant([object[]]$Options) {
         foreach ($entry in $planned) {
             $folder = $entry.Folder
             $path = Join-Path $folder.FullName '.bicdop'
-            $id = $entry.Workspace
+            $id = $null
+            if ($entry.Workspace) { $id = $entry.Workspace }
             if (-not $id -and $state.active -and $state.workspaces.Contains($state.active) -and
                 (Confirm-Bicdop "Assign '$($folder.Name)' to '$($state.workspaces[$state.active].name)'?")) {
                 $id = $state.active
