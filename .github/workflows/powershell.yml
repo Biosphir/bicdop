@@ -26,7 +26,13 @@ jobs:
           if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
             throw 'Unexpected PowerShell version on this runner.'
           }
-          .\tests\smoke.ps1
+          try {
+            .\tests\smoke.ps1
+          } catch {
+            $message = "$($_.Exception.Message) $($_.ScriptStackTrace)" -replace '[\r\n]+', ' '
+            Write-Host "::error::$message"
+            throw
+          }
       - name: Run on PowerShell 7
         if: matrix.shell == 'pwsh'
         shell: pwsh
