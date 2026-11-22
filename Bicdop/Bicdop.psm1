@@ -5,6 +5,7 @@ $script:ScanRows = @()
 $script:ProjectRows = @()
 $script:ListedWorkspace = $null
 $script:DetachedRuns = @{}
+$script:WebPreviews = @{}
 $script:BicdopSessionName = $null
 $script:BicdopResumeLogLimit = 10
 function Get-BicdopPrompt([switch]$Display, [switch]$UpdateTitle) {
@@ -454,7 +455,7 @@ function Invoke-BicdopScan([object[]]$Options) {
 }
 
 function Find-BicdopMainFile([string]$Root) {
-    foreach ($name in 'main.py', '__main__.py', 'app.py', 'main.ps1', 'main.js', 'index.js', 'app.js', 'main.mjs', 'index.mjs', 'index.html', 'index.htm', 'main.html') {
+    foreach ($name in 'main.py', '__main__.py', 'app.py', 'main.ps1', 'main.js', 'index.js', 'app.js', 'main.mjs', 'index.mjs', 'index.html', 'index.htm', 'main.html', 'index.php', 'main.php') {
         if ([IO.File]::Exists((Join-Path $Root $name))) { return $name }
     }
 }
@@ -466,8 +467,8 @@ function Resolve-BicdopMainFile([string]$Root, [string]$File) {
     if (!$path.StartsWith($prefix, $script:PathComparison) -or ![IO.File]::Exists($path)) {
         throw "Entry point must be an existing file inside the project: $File"
     }
-    if ([IO.Path]::GetExtension($path) -notin '.py', '.ps1', '.js', '.mjs', '.cjs', '.html', '.htm') {
-        throw 'Supported entry points: Python (.py), PowerShell (.ps1), Node.js (.js, .mjs, .cjs), and HTML (.html, .htm).'
+    if ([IO.Path]::GetExtension($path) -notin '.py', '.ps1', '.js', '.mjs', '.cjs', '.html', '.htm', '.php', '.exe') {
+        throw 'Supported entry points: Python (.py), PowerShell (.ps1), Node.js (.js, .mjs, .cjs), HTML (.html, .htm), PHP (.php), and Windows executables (.exe).'
     }
     $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
@@ -652,6 +653,7 @@ function Stop-BicdopPreviousRun([string]$Root) {
         }
     }
     $script:DetachedRuns.Remove($Root)
+    $script:WebPreviews.Remove($Root)
     $previous.Dispose()
 }
 
@@ -707,6 +709,152 @@ function Invoke-BicdopPyInstaller([object[]]$Options) {
     }
 }
 
+function Open-BicdopPreviewUrl([string]$Url) {
+    Start-Process -FilePath $Url -ErrorAction Stop
+}
+
+function Invoke-BicdopWebPreview([string]$Root, [string]$Entry, [string]$Extension) {
+    $directory = [IO.Path]::GetDirectoryName($Entry)
+    $serverType = if ($Extension -eq '.php') { 'PHP' } else { 'HTML' }
+    $preview = $script:WebPreviews[$Root]
+    $process = $script:DetachedRuns[$Root]
+    if (!$preview -or !$process -or $process.HasExited -or
+        $preview.Directory -ne $directory -or $preview.Type -ne $serverType) {
+        if ($serverType -eq 'PHP') {
+            $runtime = (Get-Command php -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+            if (!$runtime) { throw 'PHP CLI was not found. Install PHP and make php.exe available on PATH, then retry run.' }
+        } else {
+            $runtime = Get-BicdopPython $Root
+        }
+
+        Stop-BicdopPreviousRun $Root
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $listener.Start()
+        try { $port = $listener.LocalEndpoint.Port }
+        finally { $listener.Stop() }
+
+        $arguments = if ($serverType -eq 'PHP') { "-S 127.0.0.1:${port}" }
+        else { "-m http.server $port --bind 127.0.0.1" }
+        Write-Host "Starting $serverType preview on 127.0.0.1:${port}..."
+        $process = Start-Process -FilePath $runtime -ArgumentList $arguments -WorkingDirectory $directory -WindowStyle Hidden -PassThru -ErrorAction Stop
+        $script:DetachedRuns[$Root] = $process
+
+        try {
+            $ready = $false
+            $timeout = [Diagnostics.Stopwatch]::StartNew()
+            while (!$ready -and !$process.HasExited -and $timeout.ElapsedMilliseconds -lt 5000) {
+                $client = [Net.Sockets.TcpClient]::new()
+                try {
+                    $connection = $client.ConnectAsync([Net.IPAddress]::Loopback, $port)
+                    $ready = $connection.Wait(150)
+                } catch [AggregateException] {
+                    Start-Sleep -Milliseconds 100
+                } finally { $client.Dispose() }
+            }
+            if (!$ready -or $process.HasExited) {
+                throw "The $serverType preview server did not start in '$directory'. Check the runtime installation and retry run."
+            }
+        } catch {
+            Stop-BicdopPreviousRun $Root
+            throw
+        }
+        $preview = @{ Directory = $directory; Type = $serverType; Port = $port }
+        $script:WebPreviews[$Root] = $preview
+    }
+
+    $name = [uri]::EscapeDataString([IO.Path]::GetFileName($Entry))
+    $url = "http://127.0.0.1:$($preview.Port)/$name"
+    Open-BicdopPreviewUrl $url
+    Write-BicdopResult "Preview: $url (PID $($process.Id)). Use stop to end it."
+}
+
+function Get-BicdopProjectToolchain([string]$Root) {
+    foreach ($signature in 'platformio.ini','go.mod','Cargo.toml','pom.xml','gradlew.bat','build.gradle','build.gradle.kts','package.json','CMakeLists.txt') {
+        if (![IO.File]::Exists((Join-Path $Root $signature))) { continue }
+        return $(switch -Exact ($signature) {
+            'platformio.ini' { 'PlatformIO' }
+            'go.mod' { 'Go' }
+            'Cargo.toml' { 'Cargo' }
+            'pom.xml' { 'Maven' }
+            { $_ -in 'gradlew.bat','build.gradle','build.gradle.kts' } { 'Gradle' }
+            'package.json' { 'npm' }
+            'CMakeLists.txt' {
+                if ([IO.File]::ReadAllText((Join-Path $Root $signature)) -match 'esp-idf|ENV\{IDF_PATH\}') { 'ESP-IDF' }
+                else { 'CMake' }
+            }
+        })
+    }
+}
+
+function Invoke-BicdopProjectTool([string]$Tool, [string[]]$Arguments) {
+    $command = if ([IO.Path]::IsPathRooted($Tool)) { $Tool }
+    else { (Get-Command $Tool -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
+    if (!$command) { throw "Required tool '$Tool' was not found on PATH. Install or activate the project's toolchain and retry." }
+    Write-Host "$Tool $($Arguments -join ' ')"
+    & $command @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "'$Tool' exited with code $LASTEXITCODE." }
+}
+
+function Invoke-BicdopProjectTask($Folder, [string]$Action, [string]$Toolchain) {
+    $root = $Folder.FullName
+    Push-Location -LiteralPath $root -StackName BicdopProjectTask
+    try {
+        Write-Host "Running $Action for '$($Folder.Name)' ($Toolchain) in '$root'..."
+        switch ($Toolchain) {
+            'Go' {
+                $target = if ($Action -eq 'test') { './...' } else { '.' }
+                Invoke-BicdopProjectTool 'go' @($Action, $target)
+            }
+            'Cargo' { Invoke-BicdopProjectTool 'cargo' @($Action) }
+            'Maven' {
+                $tool = if ([IO.File]::Exists((Join-Path $root 'mvnw.cmd'))) { Join-Path $root 'mvnw.cmd' } else { 'mvn' }
+                $goal = @{ run = 'exec:java'; build = 'package'; test = 'test' }[$Action]
+                Invoke-BicdopProjectTool $tool @($goal)
+            }
+            'Gradle' {
+                $tool = if ([IO.File]::Exists((Join-Path $root 'gradlew.bat'))) { Join-Path $root 'gradlew.bat' } else { 'gradle' }
+                Invoke-BicdopProjectTool $tool @($Action)
+            }
+            'npm' {
+                $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                $scriptName = if ($Action -eq 'run') {
+                    if ($package.scripts.dev) { 'dev' } elseif ($package.scripts.start) { 'start' }
+                } elseif ($package.scripts.$Action) { $Action }
+                if (!$scriptName) { throw "No npm script for '$Action' in package.json. Add a dev, start, build, or test script as appropriate." }
+                Invoke-BicdopProjectTool 'npm.cmd' @('run', $scriptName)
+            }
+            'PlatformIO' {
+                switch ($Action) {
+                    'build' { Invoke-BicdopProjectTool 'pio' @('run') }
+                    'test' { Invoke-BicdopProjectTool 'pio' @('test') }
+                    'flash' { Invoke-BicdopProjectTool 'pio' @('run', '-t', 'upload') }
+                    default { throw 'Use build for firmware or flash to upload it to the board configured in platformio.ini.' }
+                }
+            }
+            'ESP-IDF' {
+                if ($Action -notin 'build','flash') { throw 'Use build or flash from a shell configured for ESP-IDF.' }
+                $idf = if ($env:IDF_PATH) { Join-Path $env:IDF_PATH 'tools/idf.py' }
+                if (!$idf -or ![IO.File]::Exists($idf)) {
+                    throw 'Activate the ESP-IDF environment first so IDF_PATH points to the SDK and its Python is on PATH.'
+                }
+                Invoke-BicdopProjectTool 'python' @($idf, $Action)
+            }
+            'CMake' {
+                if ($Action -eq 'run') {
+                    throw 'Build the CMake project first, then use run --set PATH-TO-EXE for a Windows app. For Pico firmware, find the UF2 in the build directory.'
+                }
+                $buildDirectory = '.bicdop-build'
+                Invoke-BicdopProjectTool 'cmake' @('-S', '.', '-B', $buildDirectory)
+                Invoke-BicdopProjectTool 'cmake' @('--build', $buildDirectory, '--config', 'Debug')
+                if ($Action -eq 'test') {
+                    Invoke-BicdopProjectTool 'ctest' @('--test-dir', $buildDirectory, '-C', 'Debug', '--output-on-failure')
+                }
+            }
+        }
+        Write-BicdopResult "$Action completed for '$($Folder.Name)'."
+    } finally { Pop-Location -StackName BicdopProjectTask }
+}
+
 function Invoke-BicdopRun([object[]]$Options) {
     if ($Options.Count -eq 2 -and $Options[0] -eq '--set') {
         $root = (Get-BicdopFolder).FullName
@@ -724,16 +872,25 @@ function Invoke-BicdopRun([object[]]$Options) {
     $folder = if ($targets.Count) { Get-BicdopNamedFolder $targets[0] } else { Get-BicdopFolder }
 
     $marker = Read-BicdopMarker (Join-Path $folder.FullName '.bicdop')
-    $file = if ($marker.main_file -is [string] -and $marker.main_file) { $marker.main_file } else { Find-BicdopMainFile $folder.FullName }
+    $file = if ($marker.main_file -is [string] -and $marker.main_file) { $marker.main_file }
+    if (!$file) {
+        $toolchain = Get-BicdopProjectToolchain $folder.FullName
+        if ($toolchain) {
+            if ($detachCount) { throw 'Use run without --detach for toolchain projects. Press Ctrl+C to stop a foreground task.' }
+            Invoke-BicdopProjectTask $folder 'run' $toolchain
+            return
+        }
+        $file = Find-BicdopMainFile $folder.FullName
+    }
     if (!$file) { throw "No main file found in '$($folder.FullName)'. Use bicdop run --set FILE in that folder." }
     $entry = Resolve-BicdopMainFile $folder.FullName $file
     $extension = [IO.Path]::GetExtension($entry)
-    if ($extension -in '.html', '.htm') {
-        Start-Process -FilePath $entry -ErrorAction Stop
-        Write-BicdopResult "Opened preview: $entry"
+    if ($extension -in '.html', '.htm', '.php') {
+        Invoke-BicdopWebPreview $folder.FullName $entry $extension
         return
     }
     $runtime = switch ($extension) {
+        '.exe' { $entry }
         '.py' { Get-BicdopPython $folder.FullName }
         '.ps1' {
             $engine = if ($PSVersionTable.PSEdition -eq 'Desktop') { 'powershell.exe' } else { 'pwsh.exe' }
@@ -746,9 +903,11 @@ function Invoke-BicdopRun([object[]]$Options) {
         }
     }
     if ($detachCount) {
-        $arguments = if ($extension -eq '.ps1') { '-NoLogo -NoProfile -File "{0}"' -f $entry } else { '"{0}"' -f $entry }
+        $arguments = if ($extension -eq '.ps1') { '-NoLogo -NoProfile -File "{0}"' -f $entry } elseif ($extension -ne '.exe') { '"{0}"' -f $entry }
         Stop-BicdopPreviousRun $folder.FullName
-        $process = Start-Process -FilePath $runtime -ArgumentList $arguments -WorkingDirectory $folder.FullName -PassThru -ErrorAction Stop
+        $processOptions = @{ FilePath = $runtime; WorkingDirectory = $folder.FullName; PassThru = $true; ErrorAction = 'Stop' }
+        if ($arguments) { $processOptions.ArgumentList = $arguments }
+        $process = Start-Process @processOptions
         $script:DetachedRuns[$folder.FullName] = $process
         Write-BicdopResult "Started '$($folder.Name)' (PID $($process.Id))."
         return
@@ -758,6 +917,7 @@ function Invoke-BicdopRun([object[]]$Options) {
     Push-Location -LiteralPath $folder.FullName -StackName BicdopRun
     try {
         if ($extension -eq '.ps1') { & $entry }
+        elseif ($extension -eq '.exe') { & $runtime }
         else { & $runtime $entry }
         if ($extension -ne '.ps1' -and $LASTEXITCODE -ne 0) {
             throw "Entry point exited with code $LASTEXITCODE."
@@ -1067,8 +1227,151 @@ function Invoke-BicdopGitHubRelease([object[]]$Options) {
     }
 }
 
-function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget) {
+function Get-BicdopGitHubAccount([string]$Cli) {
+    $login = & $Cli api --hostname github.com user --jq '.login' 2>$null
+    if ($LASTEXITCODE -ne 0 -or @($login).Count -ne 1 -or $login -notmatch '^[A-Za-z0-9-]+$') {
+        throw 'Could not verify the active GitHub account. Check your connection or run github --login.'
+    }
+    return [string]$login
+}
+
+function Invoke-BicdopGitHubAuth([string]$Action) {
+    $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$gh) { throw 'GitHub CLI (gh) was not found on PATH.' }
+    switch ($Action) {
+        '--login' {
+            Write-Host 'Opening GitHub CLI browser sign-in...'
+            & $gh.Source auth login --hostname github.com --web
+            if ($LASTEXITCODE -ne 0) { throw "GitHub CLI login failed (exit code $LASTEXITCODE)." }
+            Write-BicdopResult "GitHub CLI active account: $(Get-BicdopGitHubAccount $gh.Source)"
+        }
+        '--account' {
+            Write-Host 'Checking the active GitHub CLI account...'
+            $login = Get-BicdopGitHubAccount $gh.Source
+            Write-BicdopResult "GitHub CLI active account: $login"
+        }
+        '--logout' {
+            if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) {
+                throw 'GitHub CLI is using an environment token. Unset GH_TOKEN or GITHUB_TOKEN in PowerShell before logging out of a stored account.'
+            }
+            $login = Get-BicdopGitHubAccount $gh.Source
+            if (!(Confirm-Bicdop "Log out '$login' from GitHub CLI on this computer?")) {
+                Write-BicdopResult 'GitHub logout cancelled.'
+                return
+            }
+            & $gh.Source auth logout --hostname github.com --user $login
+            if ($LASTEXITCODE -ne 0) { throw "GitHub CLI logout failed (exit code $LASTEXITCODE)." }
+            Write-BicdopResult "Logged out '$login' from GitHub CLI. Use github --account to check which account is now active."
+        }
+    }
+}
+
+function Invoke-BicdopGitHubClone([string]$Repository, [string]$Account) {
+    $workspace = Get-BicdopActive (Read-BicdopRegistry)
+    $root = (Get-BicdopFolder $workspace.path).FullName
+    $repo = $Repository -replace '^https://github\.com/', '' -replace '\.git$', ''
+    if ($repo -notmatch '^(?:[A-Za-z0-9-]+/)?[A-Za-z0-9_.-]+$') {
+        throw 'Use a GitHub repo name, OWNER/REPO, or https://github.com/OWNER/REPO.'
+    }
+
+    $name = $repo.Split('/')[-1]
+    if ($name.EndsWith('.') -or $name -match '^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
+        throw "Cannot use '$name' as a Windows folder name."
+    }
+    $destination = Join-Path $root $name
+    if (Test-Path -LiteralPath $destination) {
+        throw "Destination already exists: $destination. Use github --status from the existing repository."
+    }
+
+    if (!$repo.Contains('/')) {
+        if (!$Account) { throw 'No verified GitHub CLI account. Run github --login or specify OWNER/REPO.' }
+        $repo = "$Account/$repo"
+    }
+
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$git) { throw 'Git was not found on PATH.' }
+    Write-Host "Cloning $repo into '$destination'..."
+    & $git.Source clone --progress -- "https://github.com/$repo.git" $destination
+    if ($LASTEXITCODE -ne 0) { throw "Clone failed for '$repo' (exit code $LASTEXITCODE)." }
+    Write-BicdopResult "Cloned $repo into '$destination'. Use plant from that folder to register it as a Bicdop project."
+}
+
+function Invoke-BicdopGitHubCreate([object[]]$Options, [string]$Account) {
+    if ($Options.Count -notin 3,4 -or $Options[1] -notin '--repo','--local' -or
+        ($Options.Count -eq 4 -and ($Options[1] -ne '--repo' -or $Options[3] -notin '--private','--public'))) {
+        throw 'Usage: bicdop github --create --repo NAME [--private | --public] | --create --local NAME'
+    }
+    $name = [string]$Options[2]
+    if ($name -notmatch '^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$' -or
+        $name.EndsWith('.') -or $name -ieq '.git') {
+        throw 'Use a repository name of 1 to 100 characters with letters, numbers, dots, underscores, or hyphens.'
+    }
+
+    if ($Options[1] -eq '--local') {
+        if ($name -match '^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
+            throw "Cannot use '$name' as a Windows folder name."
+        }
+        $workspace = Get-BicdopActive (Read-BicdopRegistry)
+        $root = (Get-BicdopFolder $workspace.path).FullName
+        $destination = Join-Path $root $name
+        if (Test-Path -LiteralPath $destination) { throw "Destination already exists: $destination" }
+        $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (!$git) { throw 'Git was not found on PATH.' }
+        $null = New-Item -ItemType Directory -Path $destination -ErrorAction Stop
+        Write-Host "Initializing local Git repository in '$destination'..."
+        & $git.Source init -- $destination
+        if ($LASTEXITCODE -ne 0) { throw "Git init failed (exit code $LASTEXITCODE). Check '$destination'." }
+        Write-BicdopResult "Created local Git repository: $destination"
+        return
+    }
+
+    if (!$Account) { throw 'No verified GitHub CLI account. Run github --login first.' }
+    $gh = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $visibility = if ($Options[3] -eq '--public') { 'public' } else { 'private' }
+    $private = if ($visibility -eq 'public') { 'false' } else { 'true' }
+    Write-Host "Creating $visibility GitHub repository '$Account/$name'..."
+    $url = & $gh api --hostname github.com --method POST user/repos -f "name=$name" -F "private=$private" --jq '.html_url'
+    if ($LASTEXITCODE -ne 0 -or @($url).Count -ne 1 -or $url -notlike "https://github.com/$Account/*") { throw "Could not create '$Account/$name'. Check permissions and whether the name is already in use." }
+    Write-BicdopResult "Created GitHub repository: $url"
+}
+
+function Show-BicdopGitHubRepositories([string]$Account) {
+    if (!$Account) { throw 'No verified GitHub CLI account. Run github --login first.' }
+    $gh = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    Write-Host "Fetching repositories owned by '$Account'..."
+    $rows = @(& $gh api --hostname github.com 'user/repos?affiliation=owner&per_page=100' --paginate --jq '.[] | [.full_name, .visibility, .html_url] | @tsv')
+    if ($LASTEXITCODE -ne 0) { throw "Could not fetch repositories for '$Account'. Check your connection and permissions." }
+    if (!$rows.Count) { Write-BicdopResult "No repositories found for '$Account'."; return }
+    foreach ($row in $rows) {
+        $name, $visibility, $url = $row -split "`t", 3
+        [pscustomobject][ordered]@{ Repository = $name; Visibility = $visibility; Url = $url }
+    }
+    Write-BicdopResult "Found $($rows.Count) repositories for '$Account'."
+}
+
+function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget, [string]$Account) {
     $action = $Options[0]
+    if ($action -eq '--create') {
+        Invoke-BicdopGitHubCreate $Options $Account
+        return
+    }
+    if ($action -eq '--list') {
+        if ($Options.Count -ne 1) { throw 'Usage: bicdop github --list' }
+        Show-BicdopGitHubRepositories $Account
+        return
+    }
+    if ($action -in '--login','--logout','--account') {
+        if ($Options.Count -ne 1) { throw 'Usage: bicdop github --login | --logout | --account' }
+        Invoke-BicdopGitHubAuth $action
+        return
+    }
+    if ($action -eq '--clone') {
+        if ($Options.Count -ne 2 -or [string]::IsNullOrWhiteSpace($Options[1])) {
+            throw 'Usage: bicdop github --clone REPO | OWNER/REPO | GITHUB-URL'
+        }
+        Invoke-BicdopGitHubClone $Options[1] $Account
+        return
+    }
     if ($action -eq '--workspace') {
         if ($Options.Count -eq 2 -and $Options[1] -eq '--publish') { Publish-BicdopWorkspace }
         elseif ($Options.Count -eq 1) { Show-BicdopWorkspaceGitHubStatus }
@@ -1087,7 +1390,7 @@ function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget) {
         ($action -in '--stage','--unstage' -and ($Options.Count -lt 2 -or ('--all' -in $Options -and $Options.Count -ne 2))) -or
         ($action -eq '--diff' -and ($Options.Count -gt 2 -or ($Options.Count -eq 2 -and $Options[1] -ne '--staged'))) -or
         ($action -notin '--commit','--stage','--unstage','--diff' -and $Options.Count -ne 1 -and !$quickPush)) {
-        throw 'Usage: bicdop github --status | --workspace | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch | --pull | --push | --publish. Use --all with --stage or --unstage.'
+        throw 'Usage: bicdop github --login | --logout | --account | --list | --create --repo NAME | --create --local NAME | --status | --clone REPO | --workspace | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch | --pull | --push | --publish. Use --all with --stage or --unstage.'
     }
     if ($action -eq '--status') {
         Write-Host 'Checking the local working tree and GitHub branch...'
@@ -1604,6 +1907,18 @@ function Get-BicdopErrorHint([string[]]$Words, [string]$Message) {
 
     switch ($Words[0]) {
         'github' {
+            if ($Words[1] -in '--login','--logout','--account') {
+                return 'Use github --login to sign in and github --account to verify the active account. Check the GitHub CLI error above.'
+            }
+            if ($Words[1] -eq '--create' -and $Words[2] -eq '--local') {
+                return 'Check the active workspace and choose a folder name that does not already exist.'
+            }
+            if ($Words[1] -in '--create','--list') {
+                return 'Check github --account and your account permissions. For create, check whether the name is already in use.'
+            }
+            if ($Words[1] -eq '--clone') {
+                return 'Check the active workspace and repository name. Use OWNER/REPO for another account. For private repos, check your Git credentials.'
+            }
             if ($Words[1] -eq '--release') {
                 return 'Check gh auth status in PowerShell, then check github_release_url and the asset paths. If the draft exists, use github --release --view TAG or --upload TAG FILE.'
             }
@@ -1878,6 +2193,10 @@ function Start-BicdopShell {
             }
         }
     } finally {
+        foreach ($root in @($script:WebPreviews.Keys)) {
+            try { Stop-BicdopPreviousRun $root }
+            catch { Write-Warning "Could not stop the web preview for $root : $($_.Exception.Message)" }
+        }
         if ($warningColor) { $warningColor.Value = $previousWarning }
         if ($null -ne $previousTitle) {
             try { $rawUI.WindowTitle = $previousTitle }
@@ -1964,8 +2283,49 @@ function bicdop {
         'scan' { Invoke-BicdopScan $options }
         'plant' { Invoke-BicdopPlant $options }
         'marker' { Invoke-BicdopMarker $options }
-        'github' { Invoke-BicdopGitHub $options }
+        'github' {
+            $account = $null
+            if ($options[0] -notin '--login','--logout','--account') {
+                $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($gh) {
+                    try { $account = Get-BicdopGitHubAccount $gh.Source }
+                    catch { Write-Verbose $_.Exception.Message }
+                }
+                if ($account) { Write-Host "GitHub CLI active account: $account" }
+                else { Write-Host 'GitHub CLI active account: unavailable.' }
+                if ($options[0] -notin '--release','--list' -and !($options[0] -eq '--create' -and $options[1] -eq '--repo')) {
+                    Write-Host 'Git operations use the credentials and author configured in Git.'
+                }
+            }
+            Invoke-BicdopGitHub $options -Account $account
+        }
         'run' { Invoke-BicdopRun $options }
+        { $_ -in 'build','test','flash' } {
+            if ($options.Count -gt 1 -or ($options.Count -and $options[0] -like '--*')) {
+                throw "Usage: bicdop $command [PROJECT]"
+            }
+            $folder = if ($options.Count) { Get-BicdopNamedFolder $options[0] } else { Get-BicdopFolder }
+            $toolchain = Get-BicdopProjectToolchain $folder.FullName
+            if (!$toolchain) { throw "No supported project configuration found in '$($folder.FullName)'." }
+            if ($command -eq 'flash' -and $toolchain -notin 'PlatformIO','ESP-IDF') {
+                throw 'Flash requires a PlatformIO or ESP-IDF project. For Pico SDK projects, build and copy the generated UF2 in BOOTSEL mode.'
+            }
+            Invoke-BicdopProjectTask $folder $command $toolchain
+        }
+        'stop' {
+            if ($options.Count -gt 1 -or ($options.Count -and $options[0] -like '--*')) {
+                throw 'Usage: bicdop stop [PROJECT]'
+            }
+            $folder = if ($options.Count) { Get-BicdopNamedFolder $options[0] } else { Get-BicdopFolder }
+            $process = $script:DetachedRuns[$folder.FullName]
+            if (!$process -or $process.HasExited) {
+                Stop-BicdopPreviousRun $folder.FullName
+                Write-BicdopResult "No active run for '$($folder.Name)' in this session."
+                return
+            }
+            Stop-BicdopPreviousRun $folder.FullName
+            Write-BicdopResult "Stopped '$($folder.Name)'."
+        }
         'pyinstaller' { Invoke-BicdopPyInstaller $options }
         'rmdir' { Remove-BicdopFolder $options }
         'ping' { Invoke-BicdopPing $options }
@@ -2088,6 +2448,13 @@ bicdop scan [PATH | --all | --git | --project NAME | --new NAME]
 bicdop plant [1,3,5 | --all]             --all plants direct subfolders of the current folder
 bicdop marker [--clear | --replant] [--all]
 bicdop marker [PROJECT] --check         Show the contents of the .bicdop marker
+bicdop github --login                  Sign in to GitHub CLI through the browser
+bicdop github --logout                 Sign out the active GitHub CLI account
+bicdop github --account                Show the active GitHub CLI account
+bicdop github --list                   List repositories owned by the active GitHub account
+bicdop github --create --repo NAME [--private | --public]  Create a GitHub repo (private by default)
+bicdop github --create --local NAME    Initialize a new Git repo inside the active workspace
+bicdop github --clone REPO              Clone a GitHub repo into the active workspace
 bicdop github --status                  Check the working tree and compare with GitHub
 bicdop github --workspace               Check every Git repository in the active workspace
 bicdop github --workspace --publish     Preview and publish ready repositories in the active workspace
@@ -2112,6 +2479,10 @@ bicdop show                              List direct subfolders of the active wo
 bicdop switch NUMBER-OR-NAME
 bicdop run [FOLDER-NAME] [--detach]      Run the main file, replacing the previous detached run in this session
 bicdop run --set FILE
+bicdop build [PROJECT]                 Build using the detected project toolchain
+bicdop test [PROJECT]                  Run the project test task
+bicdop flash [PROJECT]                 Upload PlatformIO or ESP-IDF firmware
+bicdop stop [PROJECT]                  Stop a preview or detached run in this session
 bicdop pyinstaller [PROJECT]            Build using the command stored in .bicdop
 bicdop pyinstaller --set "COMMAND-LINE" Save a full build command without running it
 bicdop project --main                   Show the main file saved in .bicdop

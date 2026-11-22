@@ -1,4 +1,4 @@
-# Bicdop 0.8.5
+# Bicdop 0.8.10
 
 ## Windows installer
 
@@ -157,8 +157,14 @@ Run from the current folder with bicdop run, or pass a quoted folder name
 to run a direct child of the active workspace. New and replanted markers
 store a detected relative main_file. Older markers can use automatic
 detection or save a relative path with bicdop run --set FILE from the
-project root. Bicdop supports Python, PowerShell, Node.js, and HTML entry points.
-HTML entry points such as index.html open as local files in the default Windows browser.
+project root. Bicdop supports Python, PowerShell, Node.js, HTML, and PHP entry points.
+For a file in a subfolder, run `bicdop run --set "biosphir/index.html"` from the project root.
+HTML and PHP previews open in the default browser over HTTP on 127.0.0.1.
+The folder containing the entry file is the document root, so links such as
+`/assets/...` resolve there. HTML requires Python. PHP requires `php.exe` on PATH.
+The preview runs in the background. Running the project again reuses a live
+server for the same document root and runtime. Use `bicdop stop [PROJECT]` in
+the same PowerShell session to stop it.
 
 Use bicdop project --main to print the entry point saved in the current folder's marker.
 Use bicdop version to check the installed and latest stable versions without applying an update.
@@ -175,11 +181,34 @@ If no version is declared, they use the value already stored in the marker.
 
 Use run --detach or run "Project Name" --detach for long-running apps.
 Bicdop starts a separate process and displays its PID. A normal run waits for
-script completion. HTML previews already open separately in the default browser.
+script completion. HTML and PHP previews run in the background by default.
 
 Running the same project again with --detach replaces the previous process
 started by this Bicdop session. Bicdop requests a normal close when possible,
 then stops the process if it stays open. Browser tabs are managed by the browser.
+
+## Build and test with project toolchains
+
+Run `bicdop build [PROJECT]` or `bicdop test [PROJECT]` from PowerShell.
+Inside Bicdop, omit the prefix. Run tasks for Go, Rust, Java and npm are
+available when a project has no explicit `main_file`. Toolchain run tasks
+stay in the foreground. The toolchain must be installed and on PATH.
+
+| Project | Detection | Run | Build and test |
+| --- | --- | --- | --- |
+| Go | go.mod | go run . | go build . / go test ./... |
+| Rust | Cargo.toml | cargo run | cargo build / cargo test |
+| Java, Maven | pom.xml | exec:java with a configured main class | package / test |
+| Java, Gradle | Gradle build file or wrapper | run with an application task | build / test |
+| React and other npm projects | package.json | npm run dev or npm run start | npm run build / npm run test |
+| C++ and Pico SDK | CMakeLists.txt | Save a built Windows executable with run --set | CMake build / CTest in .bicdop-build |
+| PlatformIO (ESP32, RP2040 and other boards) | platformio.ini | Use flash for the device | pio run / pio test |
+| Native ESP-IDF | ESP-IDF CMake project | Use flash for the device | idf.py build in an activated ESP-IDF environment |
+
+Use `bicdop flash [PROJECT]` to upload firmware with PlatformIO or ESP-IDF.
+The board, environment and serial port follow the project's toolchain settings.
+For a Pico SDK build, configure your SDK and compiler environment, build, then
+copy the generated UF2 to the device in BOOTSEL mode.
 
 ## Build with PyInstaller
 
@@ -193,6 +222,26 @@ Bicdop uses the project's .venv when available and runs the build from its root.
 Project markers store github_url when Git is available and the project's origin
 points to GitHub. Planting and replanting capture a clean HTTPS link without
 credentials. Use marker --replant to refresh it after the remote changes.
+
+Use `github --login` to sign in to GitHub CLI through the browser,
+`github --account` to see the active username, and `github --logout` to
+sign out that account after confirming. These commands work without an
+active workspace and share the local GitHub CLI session. Signing out of
+GitHub CLI does not remove credentials stored by Git Credential Manager.
+GitHub operations report the active CLI account when it can be verified.
+Git uses its own configured credentials and commit author.
+
+Use `github --create --repo NAME` to create an empty private repository on
+GitHub under the active account. Add `--public` to make it public. Use
+`github --create --local NAME` to initialize an empty Git repository in a
+new folder in the active workspace. Use `github --list` to list the repos
+owned by the active account that its credentials can access.
+
+Use `github --clone OWNER/REPO` to clone into the active workspace.
+A GitHub repository URL also works. A bare name such as `github --clone bicdop`
+uses the owner from your signed-in GitHub CLI account. Clone skips existing
+destination paths. Run `plant` inside the new folder if you want it registered
+as a Bicdop project.
 
 Run github --status from a Git project root to check its GitHub origin, working
 tree, and latest branch commit. It queries GitHub without fetching objects.

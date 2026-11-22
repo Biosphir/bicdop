@@ -28,14 +28,14 @@ function Set-TestConfig($CurrentModule) {
         function script:Confirm-Bicdop($Message) { return $Message -notlike 'Assign*' }
         function script:Get-BicdopDrives { return $script:TestRoot }
         function script:Invoke-RestMethod {
-            return @{ tag_name = 'v0.8.6'; body = 'Example release notes' }
+            return @{ tag_name = 'v0.8.11'; body = 'Example release notes' }
         }
     } $registry $root
 }
 
 try {
     Set-TestConfig $module
-    Assert-That ((& (Get-Module Bicdop) { Get-BicdopPrompt }).StartsWith('bicdop [')) 'Prompt did not activate'
+    Assert-That ((& (Get-Module Bicdop) { Get-BicdopPrompt }).StartsWith('bicdop no-workspace-selected [')) 'Prompt did not activate'
     $coloredRows = @(& (Get-Module Bicdop) {
         [pscustomobject][ordered]@{ PSTypeName='Bicdop.ScanResult'; 'No.'=1
             Project='Example Project'; Workspace='Example'; Path='C:/example'; Status='Planted'; Size='10 B' } |
@@ -140,7 +140,7 @@ try {
     $update = bicdop update --check
     $version = bicdop version
     Assert-That ($version.Installed -eq $update.Installed -and $version.Latest -eq $update.Latest -and $version.UpdateAvailable) 'Version did not match update --check'
-    Assert-That ($update.Installed -eq '0.8.5' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    Assert-That ($update.Installed -eq '0.8.10' -and $update.UpdateAvailable) 'Update check returned the wrong version'
     Assert-Throws { bicdop update --yes } 'Usage: bicdop update'
     $projectMarker = Join-Path (Get-Location).Path '.bicdop'
     $originalId = (Get-Content -LiteralPath $projectMarker -Raw | ConvertFrom-Json).id
@@ -246,18 +246,30 @@ try {
     [IO.File]::WriteAllText($htmlEntry, '<!doctype html><title>Bicdop preview</title>')
     & (Get-Module Bicdop) {
         function script:Start-Process {
-            param($FilePath, $ErrorAction)
-            $FilePath
+            param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle, [switch]$PassThru, $ErrorAction)
+            Microsoft.PowerShell.Management\Start-Process @PSBoundParameters
         }
+        function script:Open-BicdopPreviewUrl($Url) { $Url }
     }
     Set-Location $htmlFolder
-    Assert-That ((bicdop run) -eq $htmlEntry) 'Run did not detect and open the HTML entry point'
-    $customHtml = Join-Path $direct 'Preview Page.htm'
+    try {
+        $url = bicdop run
+        Assert-That ($url -like 'http://127.0.0.1:*/index.html') 'Run did not open a localhost HTML preview'
+        Assert-That ((bicdop run) -eq $url) 'Run did not reuse the live preview'
+    } finally { bicdop stop }
+
+    $customHtml = Join-Path $htmlFolder 'Preview Page.htm'
     [IO.File]::WriteAllText($customHtml, '<!doctype html><title>Bicdop preview</title>')
+    [IO.File]::WriteAllText((Join-Path $htmlFolder 'style.css'), 'body { color: green; }')
     Set-Location $direct
-    bicdop run --set 'Preview Page.htm'
+    bicdop run --set 'HTML Preview/Preview Page.htm'
     Set-Location $root
-    Assert-That ((bicdop run 'Nested') -eq $customHtml) 'Named run did not open the configured HTML entry point'
+    try {
+        $url = bicdop run 'Nested'
+        Assert-That ($url -like 'http://127.0.0.1:*/Preview%20Page.htm') 'Named run did not use the configured HTML entry point'
+        $response = Invoke-WebRequest -Uri ([uri]::new([uri]$url, '/style.css')) -UseBasicParsing
+        Assert-That ($response.Content -eq 'body { color: green; }') 'Preview did not use the entry folder as the document root'
+    } finally { bicdop stop 'Nested' }
     & (Get-Module Bicdop) {
         function script:Open-BicdopExplorer {
             param($Path)
