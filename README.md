@@ -1,4 +1,4 @@
-# Bicdop 0.7.14
+# Bicdop 0.8.5
 
 ## Windows installer
 
@@ -7,6 +7,11 @@ The per-user installer includes a fallback copy of Bicdop. The launcher checks
 for a newer stable GitHub release and starts the best available copy in a terminal.
 Use update --apply to download an update manually, then reopen the launcher.
 The launcher uses Windows PowerShell; the module also supports PowerShell 7.
+When Windows Terminal is available, the installer adds a Bicdop profile with
+the Bicdop logo. Open Bicdop from the Start menu or select its Terminal
+profile. Its tab title follows the current workspace. Entering Bicdop in an
+existing terminal tab updates the title and restores it on exit.
+
 
 For maintainers, run installer/Build.ps1 -OutputDirectory PATH with Inno Setup 6
 installed. Attach BicdopSetup.exe and the generated Bicdop-VERSION-module.zip
@@ -35,6 +40,25 @@ Add the module import to your PowerShell profile to load it on startup.
 Use open to open the current directory in File Explorer, open --workspace
 for the active workspace, or open "Project Name" for a folder inside that workspace.
 Bicdop restores a minimized Explorer window for the target folder and requests focus. If Windows initially denies focus, Bicdop retries activation before falling back to the normal Explorer window.
+
+## Resume your session
+
+Bicdop clears the terminal and restores the last working folder and workspace when you open it. Press the Up Arrow (or Down Arrow) to browse recent commands. The
+highlighted command is editable and only runs when you press Enter. Commands
+are saved before they run, so the history survives an interrupted operation.
+Bicdop never replays a command on startup.
+Explicit session --resume shows the last ten command results for that session. Use
+session --log to see the saved summary. An interrupted command without
+a recorded result is marked as outcome unknown. Full terminal output and
+progress lines are not copied into the summary.
+
+
+Use session --save "Name" and session --resume "Name" to keep separate named
+contexts. Use session --list to see them and session --close to return to the
+automatic unnamed session. The latest 100 commands and the session state are
+stored locally under %LOCALAPPDATA%/Bicdop, outside project repositories.
+Recognized password, API key, and token inputs are excluded from history.
+Console history navigation uses the Windows console; redirected input still works.
 
 ## Data and recovery
 
@@ -207,3 +231,12 @@ or stream their tool output. Short commands show the result directly.
 Use rmdir PATH to delete an empty folder after confirmation, or add
 --recursive to include its contents. Recursive deletion stops if a directory symlink or junction is found. Use ping HOST to test connectivity,
 or ping HOST --count NUMBER to send a specific number of requests.
+
+Use github --workspace to run the same status checks for all Git project
+roots inside the active workspace, including nested repositories. It does
+not change the current folder, stage files, or fetch commits.
+
+Use github --workspace --publish to preview repositories with publishable
+changes and confirm once. Bicdop then stages, commits as needed, and pushes
+each eligible repo normally. Synced, inaccessible, detached, behind, and
+diverged repositories are skipped. Use github --workspace to review details.

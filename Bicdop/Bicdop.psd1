@@ -1,6 +1,6 @@
 @{
     RootModule = 'Bicdop.psm1'
-    ModuleVersion = '0.7.14'
+    ModuleVersion = '0.8.5'
     GUID = '0ca61971-3ba1-441f-b33e-fce8d04b376a'
     Author = 'BIOSPHIR'
     PowerShellVersion = '5.1'

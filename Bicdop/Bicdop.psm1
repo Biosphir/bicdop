@@ -5,9 +5,11 @@ $script:ScanRows = @()
 $script:ProjectRows = @()
 $script:ListedWorkspace = $null
 $script:DetachedRuns = @{}
-function Get-BicdopPrompt([switch]$Display) {
+$script:BicdopSessionName = $null
+$script:BicdopResumeLogLimit = 10
+function Get-BicdopPrompt([switch]$Display, [switch]$UpdateTitle) {
     $location = Get-Location
-    $workspaceLabel = ''
+    $workspaceLabel = ' no-workspace-selected'
     try {
         $state = Read-BicdopRegistry
         if ($state.active -and $state.workspaces.Contains($state.active)) {
@@ -15,6 +17,14 @@ function Get-BicdopPrompt([switch]$Display) {
         }
     } catch {
         # Keep the shell usable if the registry cannot be read.
+    }
+    if ($UpdateTitle) {
+        $workspaceTitle = ($workspaceLabel -replace '[\p{Cc}\p{Cf}]', '').Trim()
+        if (!$workspaceTitle) { $workspaceTitle = 'no-workspace-selected' }
+        $title = "Bicdop $($ExecutionContext.SessionState.Module.Version) | $workspaceTitle"
+        try {
+            if ($Host.UI.RawUI.WindowTitle -cne $title) { $Host.UI.RawUI.WindowTitle = $title }
+        } catch { Write-Verbose 'This terminal does not expose a writable title.' }
     }
     if ($Display) {
         if ($Host.UI.SupportsVirtualTerminal) {
@@ -57,16 +67,94 @@ function Write-BicdopSyntax([string]$Text, [switch]$NoNewline) {
     Write-Host $Text.Substring($offset) -NoNewline:$NoNewline
 }
 
-function Set-BicdopSubmittedInputColor($RawUI, $Start, [string]$Line) {
-    if (!$Start -or !$Line -or $Line -match '[\x00-\x1F]') { return }
-    $end = $RawUI.CursorPosition
-    if ($end.Y -ne ($Start.Y + 1) -or
-        ($Start.X + $RawUI.LengthInBufferCells($Line)) -ge $RawUI.BufferSize.Width) { return }
+function Read-BicdopConsoleLine($RawUI, [string[]]$History) {
+    $start = $RawUI.CursorPosition
+    $width = $RawUI.BufferSize.Width - $start.X - 1
+    if ($width -lt 8) {
+        Write-Host ''
+        $start = $RawUI.CursorPosition
+        $width = $RawUI.BufferSize.Width - $start.X - 1
+        if ($width -lt 1) { return Read-Host }
+    }
+    $index = $History.Count
+    $draft = ''
+    $line = ''
+    $cursor = 0
+    $left = 0
+    $controlC = [Console]::TreatControlCAsInput
     try {
-        $RawUI.CursorPosition = $Start
-        Write-BicdopSyntax $Line -NoNewline
+        [Console]::TreatControlCAsInput = $true
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            $control = $key.Modifiers -band [ConsoleModifiers]::Control
+            if ($key.Key -eq [ConsoleKey]::Enter -or ($control -and $key.Key -eq [ConsoleKey]::C)) {
+                $RawUI.CursorPosition = $start
+                Write-Host (' ' * $width) -NoNewline
+                $RawUI.CursorPosition = $start
+                if (!$control -or $key.Key -eq [ConsoleKey]::Enter) {
+                    Write-BicdopSyntax $line
+                    return $line
+                }
+                Write-Host '^C'
+                return ''
+            }
+            if ($control -and $key.Key -eq [ConsoleKey]::Z -and !$line) {
+                Write-Host ''
+                return $null
+            }
+            switch ($key.Key) {
+                'UpArrow' {
+                    if ($index -gt 0) {
+                        if ($index -eq $History.Count) { $draft = $line }
+                        $index--
+                        $line = $History[$index]
+                        $cursor = $line.Length
+                    }
+                }
+                'DownArrow' {
+                    if ($index -lt $History.Count) {
+                        $index++
+                        $line = if ($index -eq $History.Count) { $draft } else { $History[$index] }
+                        $cursor = $line.Length
+                    }
+                }
+                'LeftArrow' { if ($cursor -gt 0) { $cursor-- } }
+                'RightArrow' { if ($cursor -lt $line.Length) { $cursor++ } }
+                'Home' { $cursor = 0 }
+                'End' { $cursor = $line.Length }
+                'Escape' { $line = ''; $cursor = 0; $index = $History.Count }
+                'Backspace' {
+                    if ($cursor -gt 0) {
+                        $cursor--
+                        $line = $line.Remove($cursor, 1)
+                    }
+                }
+                'Delete' { if ($cursor -lt $line.Length) { $line = $line.Remove($cursor, 1) } }
+                default {
+                    if (![char]::IsControl($key.KeyChar)) {
+                        $line = $line.Insert($cursor, [string]$key.KeyChar)
+                        $cursor++
+                    }
+                }
+            }
+
+            $left = [Math]::Min($left, $cursor)
+            while ($left -lt $cursor -and $RawUI.LengthInBufferCells($line.Substring($left, $cursor - $left)) -ge $width) {
+                $left++
+            }
+            $visibleLength = [Math]::Min($width, $line.Length - $left)
+            while ($visibleLength -gt 0 -and $RawUI.LengthInBufferCells($line.Substring($left, $visibleLength)) -gt $width) {
+                $visibleLength--
+            }
+            $visible = $line.Substring($left, $visibleLength)
+            $RawUI.CursorPosition = $start
+            Write-Host ($visible + (' ' * ($width - $RawUI.LengthInBufferCells($visible)))) -NoNewline
+            $position = $start
+            $position.X += $RawUI.LengthInBufferCells($line.Substring($left, $cursor - $left))
+            $RawUI.CursorPosition = $position
+        }
     } finally {
-        $RawUI.CursorPosition = $end
+        [Console]::TreatControlCAsInput = $controlC
     }
 }
 
@@ -598,7 +686,7 @@ function Invoke-BicdopPyInstaller([object[]]$Options) {
     $needsPreset = !$set -and ($command -isnot [string] -or [string]::IsNullOrWhiteSpace($command))
     if ($needsPreset) {
         $command = Read-BicdopConfirmation "Full PyInstaller command for '$($folder.Name)' (Enter to cancel):"
-        if ([string]::IsNullOrWhiteSpace($command)) { Write-Host 'PyInstaller build cancelled.'; return }
+        if ([string]::IsNullOrWhiteSpace($command)) { Write-BicdopResult 'PyInstaller build cancelled.'; return }
     }
     $buildArgs = @(ConvertTo-BicdopPyInstallerArgs $command)
     if ($set -or $needsPreset) {
@@ -613,7 +701,7 @@ function Invoke-BicdopPyInstaller([object[]]$Options) {
     try {
         & $python -m PyInstaller @buildArgs
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller exited with code $LASTEXITCODE." }
-        Write-Host "Build complete. See the PyInstaller output for the destination."
+        Write-BicdopResult "Build complete. See the PyInstaller output for the destination."
     } finally {
         Pop-Location -StackName BicdopPyInstaller
     }
@@ -642,7 +730,7 @@ function Invoke-BicdopRun([object[]]$Options) {
     $extension = [IO.Path]::GetExtension($entry)
     if ($extension -in '.html', '.htm') {
         Start-Process -FilePath $entry -ErrorAction Stop
-        Write-Host "Opened preview: $entry"
+        Write-BicdopResult "Opened preview: $entry"
         return
     }
     $runtime = switch ($extension) {
@@ -662,7 +750,7 @@ function Invoke-BicdopRun([object[]]$Options) {
         Stop-BicdopPreviousRun $folder.FullName
         $process = Start-Process -FilePath $runtime -ArgumentList $arguments -WorkingDirectory $folder.FullName -PassThru -ErrorAction Stop
         $script:DetachedRuns[$folder.FullName] = $process
-        Write-Host "Started '$($folder.Name)' (PID $($process.Id))."
+        Write-BicdopResult "Started '$($folder.Name)' (PID $($process.Id))."
         return
     }
 
@@ -674,7 +762,7 @@ function Invoke-BicdopRun([object[]]$Options) {
         if ($extension -ne '.ps1' -and $LASTEXITCODE -ne 0) {
             throw "Entry point exited with code $LASTEXITCODE."
         }
-        Write-Host "Run finished: $file"
+        Write-BicdopResult "Run finished: $file"
     } finally {
         Pop-Location -StackName BicdopRun
     }
@@ -710,8 +798,8 @@ function ConvertTo-BicdopGitHubUrl([string]$Remote) {
     }
 }
 
-function Get-BicdopGitRepository {
-    $root = (Get-BicdopFolder).FullName
+function Get-BicdopGitRepository([string]$Path = '.') {
+    $root = (Get-BicdopFolder $Path).FullName
     $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (!$git) { throw 'Git was not found on PATH.' }
 
@@ -736,8 +824,8 @@ function Get-BicdopGitOriginRef($Repository, [string]$Branch, [switch]$RequireOr
     "refs/heads/$Branch"
 }
 
-function Show-BicdopGitHubStatus {
-    $repository = Get-BicdopGitRepository
+function Show-BicdopGitHubStatus([string]$Path = '.') {
+    $repository = Get-BicdopGitRepository $Path
     $root = $repository.Root
     $ErrorActionPreference = 'Continue'
     $url = Get-BicdopGitHubUrl $root
@@ -817,6 +905,121 @@ function Show-BicdopGitHubStatus {
     return [pscustomobject]$status
 }
 
+function Show-BicdopWorkspaceGitHubStatus {
+    $active = Get-BicdopActive (Read-BicdopRegistry)
+    $root = (Get-BicdopFolder $active.path).FullName
+    if (!(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw 'Git was not found on PATH.'
+    }
+    Write-Host "Looking for Git repositories in '$($active.name)'..."
+    $repos = @(Find-BicdopFolders @($root) {
+        param($folder)
+        !$folder.FullName.Equals($root, $script:PathComparison) -and
+            (Test-Path -LiteralPath (Join-Path $folder.FullName '.git'))
+    } | Sort-Object FullName)
+    if (!$repos.Count) {
+        Write-BicdopResult 'No Git repository roots found inside the active workspace.'
+        return
+    }
+    $checked = 0
+    $reachable = 0
+    $synced = 0
+    $failed = 0
+    try {
+        for ($i = 0; $i -lt $repos.Count; $i++) {
+            $repo = $repos[$i]
+            Write-Progress -Activity 'Checking Git repositories' -Status "$($i + 1)/$($repos.Count): $($repo.Name)" -CurrentOperation $repo.FullName -PercentComplete (100 * $i / $repos.Count)
+            try {
+                $status = Show-BicdopGitHubStatus $repo.FullName
+                $row = [ordered]@{ Project = $repo.Name; Path = $repo.FullName }
+                foreach ($field in $status.PSObject.Properties) { $row[$field.Name] = $field.Value }
+                $checked++
+                if ($status.RemoteReachable) { $reachable++ }
+                if ($status.Synced) { $synced++ }
+                [pscustomobject]$row
+            } catch {
+                Write-Warning "Could not check '$($repo.FullName)': $($_.Exception.Message)"
+                $failed++
+            }
+        }
+    } finally {
+        Write-Progress -Activity 'Checking Git repositories' -Completed
+    }
+    Write-BicdopResult "$checked repos checked, $reachable GitHub remotes reachable, $synced synced, $failed errors."
+}
+
+function Get-BicdopGitPushUrl($Repository) {
+    $ErrorActionPreference = 'Continue'
+    $pushUrls = @(& $Repository.Git -C $Repository.Root remote get-url --push --all origin 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $pushUrls.Count -ne 1) { throw 'Origin must have exactly one GitHub push URL.' }
+    $url = ConvertTo-BicdopGitHubUrl $pushUrls[0]
+    if (!$url) { throw 'Origin must have exactly one GitHub push URL.' }
+    $url
+}
+
+function Publish-BicdopWorkspace {
+    $candidates = [Collections.Generic.List[object]]::new()
+    $skipped = 0
+    foreach ($repo in @(Show-BicdopWorkspaceGitHubStatus)) {
+        if ($repo.Synced) {
+            Write-Host "Skipped '$($repo.Project)': already synced."
+        } elseif ($repo.RemoteReachable -and $repo.Branch -ne 'Detached HEAD' -and
+            ($repo.Commits -in 'Up to date','Branch has not been published to GitHub.' -or
+                $repo.Commits -match '^[1-9]\d* ahead, 0 behind$')) {
+            try {
+                $pushUrl = Get-BicdopGitPushUrl (Get-BicdopGitRepository $repo.Path)
+                if ($pushUrl -ine $repo.GitHub) { throw 'Origin fetch and push point to different repositories.' }
+                $candidates.Add($repo)
+                continue
+            } catch {
+                Write-Warning "Skipped '$($repo.Project)': $($_.Exception.Message)"
+            }
+        } else {
+            Write-Warning "Skipped '$($repo.Project)': $($repo.Commits) ($($repo.GitHub)). Check github --status for that project."
+        }
+        $skipped++
+    }
+
+    if (!$candidates.Count) {
+        Write-BicdopResult "Nothing to publish. $skipped repos skipped."
+        return
+    }
+    Write-Host "Ready to publish $($candidates.Count) repo(s):"
+    foreach ($repo in $candidates) {
+        Write-Host "  $($repo.Path) -> $($repo.GitHub) [$($repo.RemoteBranch)]"
+        Write-Host "    $($repo.Commits) | $($repo.WorkingTree)"
+    }
+    if (!(Confirm-Bicdop 'Stage all changes, commit as needed, and push these repositories?')) {
+        Write-BicdopResult 'Workspace publish cancelled.'
+        return
+    }
+
+    $published = 0
+    $failed = 0
+    try {
+        for ($i = 0; $i -lt $candidates.Count; $i++) {
+            $repo = $candidates[$i]
+            Write-Progress -Activity 'Publishing workspace repositories' -Status "$($i + 1)/$($candidates.Count): $($repo.Project)" -CurrentOperation $repo.Path -PercentComplete (100 * $i / $candidates.Count)
+            $entered = $false
+            try {
+                Push-Location -LiteralPath $repo.Path -StackName BicdopWorkspacePublish -ErrorAction Stop
+                $entered = $true
+                Write-Host "Publishing '$($repo.Project)'..."
+                Invoke-BicdopGitHub @('--publish') -ExpectedTarget $repo
+                $published++
+            } catch {
+                Write-Warning "Publish failed in '$($repo.Path)': $($_.Exception.Message)"
+                $failed++
+            } finally {
+                if ($entered) { Pop-Location -StackName BicdopWorkspacePublish }
+            }
+        }
+    } finally {
+        Write-Progress -Activity 'Publishing workspace repositories' -Completed
+    }
+    Write-BicdopResult "Workspace publish finished: $published published, $skipped skipped, $failed failed."
+}
+
 function Invoke-BicdopGitHubRelease([object[]]$Options) {
     $usage = 'Usage: github --release TAG [FILE ...] | --release --view TAG | --release --upload TAG FILE [...] | --release --publish TAG'
     if (!$Options.Count) { throw $usage }
@@ -858,14 +1061,20 @@ function Invoke-BicdopGitHubRelease([object[]]$Options) {
     & $gh.Source @arguments
     if ($LASTEXITCODE -ne 0) { throw "GitHub release $action failed (exit code $LASTEXITCODE)." }
     switch ($action) {
-        'create' { Write-Host "Draft $tag created. Use github --release --view $tag to review it." }
-        'upload' { Write-Host "Assets uploaded to $tag." }
-        'publish' { Write-Host "Release $tag published." }
+        'create' { Write-BicdopResult "Draft $tag created. Use github --release --view $tag to review it." }
+        'upload' { Write-BicdopResult "Assets uploaded to $tag." }
+        'publish' { Write-BicdopResult "Release $tag published." }
     }
 }
 
-function Invoke-BicdopGitHub([object[]]$Options) {
+function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget) {
     $action = $Options[0]
+    if ($action -eq '--workspace') {
+        if ($Options.Count -eq 2 -and $Options[1] -eq '--publish') { Publish-BicdopWorkspace }
+        elseif ($Options.Count -eq 1) { Show-BicdopWorkspaceGitHubStatus }
+        else { throw 'Usage: bicdop github --workspace [--publish]' }
+        return
+    }
     if ($action -eq '--release') {
         Invoke-BicdopGitHubRelease @($Options | Select-Object -Skip 1)
         return
@@ -878,7 +1087,7 @@ function Invoke-BicdopGitHub([object[]]$Options) {
         ($action -in '--stage','--unstage' -and ($Options.Count -lt 2 -or ('--all' -in $Options -and $Options.Count -ne 2))) -or
         ($action -eq '--diff' -and ($Options.Count -gt 2 -or ($Options.Count -eq 2 -and $Options[1] -ne '--staged'))) -or
         ($action -notin '--commit','--stage','--unstage','--diff' -and $Options.Count -ne 1 -and !$quickPush)) {
-        throw 'Usage: bicdop github --status | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch | --pull | --push | --publish. Use --all with --stage or --unstage.'
+        throw 'Usage: bicdop github --status | --workspace | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch | --pull | --push | --publish. Use --all with --stage or --unstage.'
     }
     if ($action -eq '--status') {
         Write-Host 'Checking the local working tree and GitHub branch...'
@@ -888,8 +1097,9 @@ function Invoke-BicdopGitHub([object[]]$Options) {
 
     $repository = Get-BicdopGitRepository
     $ErrorActionPreference = 'Continue'
-    if ($action -in '--fetch','--pull','--push' -and !(Get-BicdopGitHubUrl $repository.Root)) {
-        throw 'Configure a GitHub origin for this repository first.'
+    if ($action -in '--fetch','--pull','--push') {
+        $originUrl = Get-BicdopGitHubUrl $repository.Root
+        if (!$originUrl) { throw 'Configure a GitHub origin for this repository first.' }
     }
     $arguments = switch ($action) {
         '--stage' {
@@ -929,9 +1139,11 @@ function Invoke-BicdopGitHub([object[]]$Options) {
                 Write-Host "Pulling $reference from origin (fast-forward only)..."
                 'pull', '--progress', '--ff-only', 'origin', $reference
             } else {
-                $pushUrls = @(& $repository.Git -C $repository.Root remote get-url --push --all origin 2>$null)
-                if ($LASTEXITCODE -ne 0 -or $pushUrls.Count -ne 1 -or !(ConvertTo-BicdopGitHubUrl $pushUrls[0])) {
-                    throw 'Origin must have exactly one GitHub push URL.'
+                $pushUrl = Get-BicdopGitPushUrl $repository
+                if ($ExpectedTarget -and ($originUrl -ine $ExpectedTarget.GitHub -or
+                    $pushUrl -ine $ExpectedTarget.GitHub -or $branch -cne $ExpectedTarget.Branch -or
+                    $reference -cne "refs/heads/$($ExpectedTarget.RemoteBranch)")) {
+                    throw 'The branch or GitHub destination changed after the preview. Run workspace publish again.'
                 }
                 'push', '--progress', '--set-upstream', 'origin', "HEAD:$reference"
             }
@@ -971,12 +1183,12 @@ function Invoke-BicdopGitHub([object[]]$Options) {
     if ($action -in '--stage','--unstage') {
         $staged = @(& $repository.Git -C $repository.Root diff --cached --name-only -- 2>$null)
         if ($LASTEXITCODE -eq 0) {
-            if ($staged.Count) { Write-Host "$($staged.Count) path(s) ready to commit." }
-            else { Write-Host 'No changes staged.' }
+            if ($staged.Count) { Write-BicdopResult "$($staged.Count) path(s) ready to commit." }
+            else { Write-BicdopResult 'No changes staged.' }
             return
         }
     }
-    if ($action -ne '--diff') { Write-Host "Git $($action.Substring(2)) complete." }
+    if ($action -ne '--diff') { Write-BicdopResult "Git $($action.Substring(2)) complete." }
 }
 
 function Invoke-BicdopPlant([object[]]$Options) {
@@ -1403,6 +1615,7 @@ function Get-BicdopErrorHint([string[]]$Words, [string]$Message) {
         'pyinstaller' { return 'Read the build error above. Verify PyInstaller in the project Python environment and check the saved .spec or .py path.' }
         'run' { return 'Check project --main and the runtime output above. Check that the project dependencies are installed.' }
         { $_ -in 'update','version' } { return 'Check GitHub connectivity and run update --check. If a package fails verification, keep the installed copy.' }
+        'session' { return 'Use session --list to see saved sessions and check that the saved folder still exists.' }
         'switch' { return 'Run projects to see the registered project names and current row numbers.' }
         { $_ -in 'workspace','scan','show','projects' } { return 'Check that the workspace folder is accessible. Use workspace to see registered workspaces.' }
         { $_ -in 'cd','cd..','open','li','ls','dir','mkdir','rmdir','plant','marker','project' } {
@@ -1412,24 +1625,214 @@ function Get-BicdopErrorHint([string[]]$Words, [string]$Message) {
     }
 }
 
+function Test-BicdopHistoryLine([string]$Line) {
+    return $Line -notmatch '^\s*(?:bicdop\s+)?(?:exit|--exit)\s*$' -and
+        $Line -notmatch '(?:--(?:password|token|secret|api[-_]?key)(?:[=\s]|$)|https?://[^/\s]+@|marker\s+--set\s+\S*(?:password|token|secret|credential|api[-_]?key)\S*\s)'
+}
+
+function Write-BicdopResult([string]$Message) {
+    $script:BicdopCommandResult = $Message
+    Write-Host $Message
+}
+
+function Format-BicdopSessionSummary([string]$Text) {
+    $clean = ($Text -replace '[\x00-\x1F\x7F]', ' ' -replace '\s{2,}', ' ').Trim()
+    $clean = $clean -replace '(https?://)[^/\s]+@', '$1[redacted]@'
+    if ($clean.Length -gt 240) { return $clean.Substring(0, 237) + '...' }
+    return $clean
+}
+
+function Show-BicdopSessionLog($State, [int]$Limit = 0) {
+    $entries = @($State.log | Where-Object { [string]$_.session -ieq [string]$script:BicdopSessionName })
+    if (!$entries.Count) {
+        if (!$Limit) { Write-Host 'No command results recorded for this session yet.' }
+        return
+    }
+    if ($Limit) { $entries = @($entries | Select-Object -Last $Limit) }
+    $label = if ($script:BicdopSessionName) { $script:BicdopSessionName } else { 'automatic session' }
+    Write-Host "Recent commands ($label)"
+    foreach ($entry in $entries) {
+        $detail = switch ($entry.status) {
+            'completed' { if ($entry.result) { $entry.result } else { 'Finished' } }
+            'failed'    { "Error: $($entry.result)" }
+            default     { 'Outcome unknown (no completion recorded)' }
+        }
+        Write-BicdopSyntax ('  ' + $entry.command) -NoNewline
+        Write-Host " | $detail"
+    }
+    Write-Host ''
+}
+
+function Save-BicdopSession([string]$Command, [string]$EntryId, [string]$Status, [string]$Result) {
+    $location = Get-Location
+    if ($location.Provider.Name -ne 'FileSystem') { return }
+    $context = @{
+        workspace = (Read-BicdopRegistry).active
+        path = $location.ProviderPath
+        name = $script:BicdopSessionName
+        saved_at = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+    Invoke-BicdopSessionWrite {
+        param($state)
+        $state.last = $context
+        if ($context.name) { $state.named[$context.name] = $context }
+        if ($Command -and $state.history[-1] -cne $Command) {
+            $state.history = @((@($state.history) + $Command) | Select-Object -Last 100)
+        }
+        if ($EntryId -and $Command) {
+            $entry = @{
+                id = $EntryId
+                session = [string]$context.name
+                command = Format-BicdopSessionSummary $Command
+                status = 'pending'
+            }
+            $state.log = @((@($state.log) + $entry) | Select-Object -Last 200)
+        } elseif ($EntryId -and $Status) {
+            foreach ($entry in $state.log) {
+                if ($entry.id -ceq $EntryId) {
+                    $entry.status = $Status
+                    $entry.result = Format-BicdopSessionSummary $Result
+                    break
+                }
+            }
+        }
+    }
+}
+
+function Restore-BicdopSession($Context) {
+    if (!$Context) { return $false }
+    $state = Read-BicdopRegistry
+    $workspace = $null
+    if ($Context.workspace) {
+        $workspace = $state.workspaces[$Context.workspace]
+        if (!$workspace) { Write-Warning 'The saved workspace is no longer registered.' }
+    }
+    $path = $Context.path
+    if (![IO.Directory]::Exists($path)) {
+        $path = $workspace.path
+        if (![IO.Directory]::Exists($path)) {
+            Write-Warning 'The last session folder is unavailable. Staying in the current folder.'
+            return $false
+        }
+        Write-Warning 'The last session folder is unavailable. Opening the workspace root.'
+    }
+    $folder = Get-BicdopFolder $path
+    if ($state.active -ne $Context.workspace -and (!$Context.workspace -or $workspace)) {
+        Invoke-BicdopRegistryWrite {
+            param($latest)
+            if ($Context.workspace -and !$latest.workspaces.Contains($Context.workspace)) {
+                throw 'The saved workspace is no longer registered.'
+            }
+            $latest.active = $Context.workspace
+            Save-BicdopRegistry $latest
+        }
+        $script:ScanRows = @()
+        $script:ProjectRows = @()
+        $script:ListedWorkspace = $null
+    }
+    Set-Location -LiteralPath $folder.FullName -ErrorAction Stop
+    $script:BicdopSessionName = $Context.name
+    Write-Host "Session resumed: $($folder.FullName)"
+    return $true
+}
+
+function Invoke-BicdopSession([object[]]$Options) {
+    $usage = 'Usage: session --list | --save NAME | --resume NAME | --close | --log'
+    if ($Options.Count -notin 1,2 -or $Options[0] -notin '--list','--save','--resume','--close','--log' -or
+        ($Options[0] -in '--list','--close','--log' -and $Options.Count -ne 1) -or
+        ($Options[0] -in '--save','--resume' -and ($Options.Count -ne 2 -or [string]::IsNullOrWhiteSpace($Options[1])))) {
+        throw $usage
+    }
+    switch ($Options[0]) {
+        '--log' { Show-BicdopSessionLog (Read-BicdopSessions) }
+        '--list' {
+            $state = Read-BicdopSessions
+            if (!$state.named.Count) { Write-Host 'No named sessions. Your last session is saved automatically.' }
+            $workspaces = (Read-BicdopRegistry).workspaces
+            foreach ($item in ($state.named.GetEnumerator() | Sort-Object Key)) {
+                $record = $item.Value
+                $workspaceName = if ($record.workspace) { $workspaces[$record.workspace].name }
+                [pscustomobject][ordered]@{
+                    Name = $item.Key
+                    Workspace = $workspaceName
+                    Path = $record.path
+                    SavedAt = $record.saved_at
+                }
+            }
+        }
+        '--save' {
+            $script:BicdopSessionName = $Options[1].Trim()
+            Save-BicdopSession
+            Write-Host "Saved session '$script:BicdopSessionName'."
+        }
+        '--resume' {
+            $state = Read-BicdopSessions
+            $name = $Options[1].Trim()
+            if (!$state.named.Contains($name)) { throw "Session '$name' was not found. Use session --list." }
+            if (Restore-BicdopSession $state.named[$name]) {
+                Show-BicdopSessionLog $state -Limit $script:BicdopResumeLogLimit
+                Save-BicdopSession
+            }
+        }
+        '--close' {
+            if (!$script:BicdopSessionName) { Write-Host 'No named session is open. Automatic saving remains active.'; return }
+            Save-BicdopSession
+            $script:BicdopSessionName = $null
+            Save-BicdopSession
+            Write-Host 'Named session closed. Automatic saving remains active.'
+        }
+    }
+}
+
 function Start-BicdopShell {
     $rawUI = $Host.UI.RawUI
     $interactiveConsole = $Host.Name -eq 'ConsoleHost' -and $rawUI -and
         ![Console]::IsInputRedirected -and ![Console]::IsOutputRedirected
+    $previousTitle = $null
+    if ($interactiveConsole) {
+        try { $previousTitle = $rawUI.WindowTitle }
+        catch { Write-Verbose 'This terminal does not expose a title.' }
+    }
     $warningColor = if ($Host.PrivateData) { $Host.PrivateData.PSObject.Properties['WarningForegroundColor'] }
     $previousWarning = if ($warningColor) { $warningColor.Value }
     try {
         if ($warningColor) { $warningColor.Value = [ConsoleColor]::Yellow }
+        if ($interactiveConsole) { Clear-Host }
+        $history = @()
+        $sessionErrorShown = $false
+        try {
+            $saved = Read-BicdopSessions
+            $history = @($saved.history | Where-Object { $_ -is [string] })
+            $null = Restore-BicdopSession $saved.last
+        } catch {
+            Write-Warning "Could not restore the last Bicdop session: $($_.Exception.Message)"
+        }
         while ($true) {
-            Get-BicdopPrompt -Display
-            $start = if ($interactiveConsole) { $rawUI.CursorPosition }
-            $line = Read-Host
+            Get-BicdopPrompt -Display -UpdateTitle:($null -ne $previousTitle)
+            $line = if ($interactiveConsole) { Read-BicdopConsoleLine $rawUI $history } else { Read-Host }
             if ($null -eq $line) { return }
-            if ($interactiveConsole) {
-                try { Set-BicdopSubmittedInputColor $rawUI $start $line }
-                catch { Write-Verbose 'The terminal could not recolor the submitted line.' }
-            }
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $shouldSave = $line -notmatch '^\s*(?:bicdop\s+)?(?:exit|--exit)\s*$'
+            $entryId = $null
+            $outcome = $null
+            $script:BicdopCommandResult = $null
+            if ($shouldSave) {
+                $command = $null
+                if (Test-BicdopHistoryLine $line) {
+                    $command = $line
+                    if ($line -notmatch '^\s*(?:bicdop\s+)?(?:session|help|--help|flush)(?:\s|$)') {
+                        $entryId = [guid]::NewGuid().ToString()
+                    }
+                    if ($history[-1] -cne $line) { $history = @(($history + $line) | Select-Object -Last 100) }
+                }
+                try { Save-BicdopSession -Command $command -EntryId $entryId }
+                catch {
+                    if (!$sessionErrorShown) {
+                        Write-Warning "Could not save Bicdop session: $($_.Exception.Message)"
+                        $sessionErrorShown = $true
+                    }
+                }
+            }
             $words = @()
             try {
                 $words = @(ConvertFrom-BicdopInput $line)
@@ -1447,19 +1850,39 @@ function Start-BicdopShell {
                     else { foreach ($row in $help -split '\r?\n') { Write-BicdopSyntax $row } }
                 } elseif ($words[0] -in 'projects','show','scan') {
                     bicdop @words | Out-String -Stream | Write-BicdopProjectTable
+                } elseif ($words[0] -eq 'github' -and $words[1] -eq '--status') {
+                    $report = bicdop @words
+                    if ($report) { $script:BicdopCommandResult = "$($report.Commits); $($report.WorkingTree)" }
+                    $report | Out-Host
                 } else {
                     bicdop @words | Out-Host
                 }
+                $outcome = 'completed'
             } catch {
                 $message = $_.Exception.Message
+                $outcome = 'failed'
+                $script:BicdopCommandResult = $message
                 Write-Host "Error: $message" -ForegroundColor Red
                 Write-Host ("Try: " + (Get-BicdopErrorHint $words $message)) -ForegroundColor Red
             } finally {
+                if ($shouldSave) {
+                    try { Save-BicdopSession -EntryId $entryId -Status $outcome -Result $script:BicdopCommandResult }
+                    catch {
+                        if (!$sessionErrorShown) {
+                            Write-Warning "Could not save Bicdop session: $($_.Exception.Message)"
+                            $sessionErrorShown = $true
+                        }
+                    }
+                }
                 Write-Host ''
             }
         }
     } finally {
         if ($warningColor) { $warningColor.Value = $previousWarning }
+        if ($null -ne $previousTitle) {
+            try { $rawUI.WindowTitle = $previousTitle }
+            catch { Write-Verbose 'Could not restore the original terminal title.' }
+        }
     }
 }
 
@@ -1485,7 +1908,7 @@ function Remove-BicdopFolder([object[]]$Options) {
     }
     $target = if ($recursive) { "folder '$path' and everything inside it" } else { "folder '$path'" }
     if (!(Confirm-Bicdop "Permanently delete $target?")) {
-        Write-Host 'Folder deletion cancelled.'
+        Write-BicdopResult 'Folder deletion cancelled.'
         return
     }
     $confirmed = Get-BicdopFolder $path
@@ -1510,7 +1933,7 @@ function Remove-BicdopFolder([object[]]$Options) {
         Write-Host "Deleting '$path' and its contents..."
     }
     [IO.Directory]::Delete($confirmed.FullName, $recursive)
-    Write-Host "Deleted folder: $path"
+    Write-BicdopResult "Deleted folder: $path"
 }
 
 function Invoke-BicdopPing([object[]]$Options) {
@@ -1536,6 +1959,7 @@ function bicdop {
     $options = @($args | Select-Object -Skip 1)
     if ($command -eq 'cd..' -and !$options.Count) { $command = 'cd'; $options = @('..') }
     switch ($command) {
+        'session' { Invoke-BicdopSession $options }
         'workspace' { Invoke-BicdopWorkspace $options }
         'scan' { Invoke-BicdopScan $options }
         'plant' { Invoke-BicdopPlant $options }
@@ -1658,12 +2082,15 @@ Paths with spaces: wrap the complete path or name in quotes.
             if ($options.Count) { throw 'Usage: help [errors]' }
             @'
 bicdop                                   Start the interactive Bicdop shell
+bicdop session [--list | --save NAME | --resume NAME | --close | --log]
 bicdop workspace [--set | --find | --goto | --use NAME-OR-NUMBER]
 bicdop scan [PATH | --all | --git | --project NAME | --new NAME]
 bicdop plant [1,3,5 | --all]             --all plants direct subfolders of the current folder
 bicdop marker [--clear | --replant] [--all]
 bicdop marker [PROJECT] --check         Show the contents of the .bicdop marker
 bicdop github --status                  Check the working tree and compare with GitHub
+bicdop github --workspace               Check every Git repository in the active workspace
+bicdop github --workspace --publish     Preview and publish ready repositories in the active workspace
 bicdop github --stage FILE [...]        Stage selected paths
 bicdop github --stage --all             Stage new, modified, and deleted files
 bicdop github --diff [--staged]         Show unstaged or staged changes

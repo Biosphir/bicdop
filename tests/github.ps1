@@ -5,7 +5,8 @@ $parent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $root = Join-Path $parent ('bicdop-git-test-' + [guid]::NewGuid())
 $local = Join-Path $root 'local'
 $remote = Join-Path $root 'origin.git'
-$peer = Join-Path $root 'peer'
+$peer = Join-Path $root 'nested/peer'
+[void][IO.Directory]::CreateDirectory((Split-Path -Parent $peer))
 [void][IO.Directory]::CreateDirectory($root)
 
 function Invoke-GitFixture([string[]]$Arguments) {
@@ -95,7 +96,49 @@ try {
         if ((Invoke-GitFixture @('-C',$remote,'rev-parse','refs/heads/main')) -ne $pushed) {
             throw 'Shortcut created a commit without changes'
         }
-        'Bicdop Git stage, commit, push, fetch, pull and push shortcut passed.'
+        & (Get-Module Bicdop) {
+            param($root)
+            $script:GitTestWorkspace = $root
+            function script:Read-BicdopRegistry {
+                @{ active = 'test'; workspaces = @{ test = @{ name = 'Fixture'; path = $script:GitTestWorkspace } } }
+            }
+        } $root
+        $workspaceStatus = @(bicdop github --workspace)
+        if ($workspaceStatus.Count -ne 2 -or $workspaceStatus.Path -notcontains $local -or
+            $workspaceStatus.Path -notcontains $peer -or @($workspaceStatus | Where-Object RemoteReachable).Count -ne 2) {
+            throw 'Workspace status did not check both Git roots'
+        }
+        if ((Get-Location).Path -ne $local) { throw 'Workspace status changed the current folder' }
+        $beforePeer = Invoke-GitFixture @('-C',$peer,'rev-parse','HEAD')
+        bicdop github --workspace --publish | Out-Null
+        if ((Invoke-GitFixture @('-C',$peer,'rev-parse','HEAD')) -ne $beforePeer) { throw 'Workspace publish changed a behind repo' }
+
+        $peerRemote = Join-Path $root 'peer-origin.git'
+        Invoke-GitFixture @('init','--bare','-b','main',$peerRemote) | Out-Null
+        Invoke-GitFixture @('-C',$peer,'remote','set-url','origin',$peerRemote)
+        Invoke-GitFixture @('-C',$peer,'push','--set-upstream','origin','main') | Out-Null
+        $beforeLocal = Invoke-GitFixture @('-C',$local,'rev-parse','HEAD')
+        [IO.File]::WriteAllText((Join-Path $local 'workspace local.txt'), 'local')
+        [IO.File]::WriteAllText((Join-Path $peer 'workspace peer.txt'), 'peer')
+        & (Get-Module Bicdop) {
+            $script:ApproveWorkspacePublish = $false
+            function script:Confirm-Bicdop { $script:ApproveWorkspacePublish }
+        }
+        bicdop github --workspace --publish | Out-Null
+        if ((Invoke-GitFixture @('-C',$local,'rev-parse','HEAD')) -ne $beforeLocal -or
+            (Invoke-GitFixture @('-C',$peer,'rev-parse','HEAD')) -ne $beforePeer -or
+            @(Invoke-GitFixture @('-C',$local,'diff','--cached','--name-only')).Count -or
+            @(Invoke-GitFixture @('-C',$peer,'diff','--cached','--name-only')).Count) {
+            throw 'Declining changed repositories or staged files'
+        }
+        & (Get-Module Bicdop) { $script:ApproveWorkspacePublish = $true }
+        bicdop github --workspace --publish | Out-Null
+        if ((Invoke-GitFixture @('-C',$remote,'log','-1','--format=%s','main')) -ne '+1 files -0 files 0 Modified' -or
+            (Invoke-GitFixture @('-C',$peerRemote,'log','-1','--format=%s','main')) -ne '+1 files -0 files 0 Modified' -or
+            (Get-Location).Path -ne $local) {
+            throw 'Workspace publish did not commit and push both eligible repositories'
+        }
+        'Bicdop Git commands, workspace status and workspace publish passed.'
     } finally {
         Pop-Location
     }

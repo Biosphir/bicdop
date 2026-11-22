@@ -28,7 +28,7 @@ function Set-TestConfig($CurrentModule) {
         function script:Confirm-Bicdop($Message) { return $Message -notlike 'Assign*' }
         function script:Get-BicdopDrives { return $script:TestRoot }
         function script:Invoke-RestMethod {
-            return @{ tag_name = 'v0.7.15'; body = 'Example release notes' }
+            return @{ tag_name = 'v0.8.6'; body = 'Example release notes' }
         }
     } $registry $root
 }
@@ -140,7 +140,7 @@ try {
     $update = bicdop update --check
     $version = bicdop version
     Assert-That ($version.Installed -eq $update.Installed -and $version.Latest -eq $update.Latest -and $version.UpdateAvailable) 'Version did not match update --check'
-    Assert-That ($update.Installed -eq '0.7.14' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    Assert-That ($update.Installed -eq '0.8.5' -and $update.UpdateAvailable) 'Update check returned the wrong version'
     Assert-Throws { bicdop update --yes } 'Usage: bicdop update'
     $projectMarker = Join-Path (Get-Location).Path '.bicdop'
     $originalId = (Get-Content -LiteralPath $projectMarker -Raw | ConvertFrom-Json).id
@@ -330,9 +330,15 @@ try {
             $script:InputLines.Enqueue($line)
         }
         function script:Read-Host { $script:InputLines.Dequeue() }
+        function script:Read-BicdopConsoleLine { Read-Host }
     }
     bicdop
     Assert-That ((Get-Location).Path -eq $root) 'cd.. did not move to the parent inside Bicdop'
+    $savedSession = & (Get-Module Bicdop) { Read-BicdopSessions }
+    Assert-That ($savedSession.last.path -eq (Get-Location).Path) 'Bicdop did not save the current location'
+    Assert-That ($savedSession.history -contains 'cd "Shell Test"' -and $savedSession.history -notcontains 'exit') 'Bicdop did not save the usable command history'
+    $record = $savedSession.log | Where-Object { $_.command -eq 'cd "Shell Test"' }
+    Assert-That ($record.status -eq 'completed') 'Session log did not record the command result'
     Assert-That ((bicdop li).Name -contains 'Shell Test') 'The shell did not create or list the quoted directory'
     Assert-That (!(Test-Path -LiteralPath (Join-Path $root 'skipped'))) 'Exit did not stop the shell'
     Assert-Throws { & (Get-Module Bicdop) { ConvertFrom-BicdopInput 'pwd; Get-Date' } } 'Invalid input'

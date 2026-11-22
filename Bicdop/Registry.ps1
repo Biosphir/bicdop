@@ -51,16 +51,53 @@ function Invoke-BicdopRegistryWrite([scriptblock]$Change) {
 }
 
 function Save-BicdopRegistry($State) {
-    $temporary = "$script:RegistryPath.$([guid]::NewGuid()).tmp"
+    Save-BicdopJson $script:RegistryPath $State
+}
+
+function Save-BicdopJson([string]$Path, $State) {
+    $temporary = "$Path.$([guid]::NewGuid()).tmp"
     try {
         [IO.File]::WriteAllText($temporary, (ConvertTo-Json -InputObject $State -Depth 8))
-        if ([IO.File]::Exists($script:RegistryPath)) {
-            [IO.File]::Replace($temporary, $script:RegistryPath, [NullString]::Value)
+        if ([IO.File]::Exists($Path)) {
+            [IO.File]::Replace($temporary, $Path, [NullString]::Value)
         } else {
-            [IO.File]::Move($temporary, $script:RegistryPath)
+            [IO.File]::Move($temporary, $Path)
         }
     } finally {
         [IO.File]::Delete($temporary)
+    }
+}
+
+function Get-BicdopSessionsPath {
+    Join-Path (Split-Path -LiteralPath $script:RegistryPath) 'session.json'
+}
+
+function Read-BicdopSessions {
+    $path = Get-BicdopSessionsPath
+    if (![IO.File]::Exists($path)) { return @{ schema = 1; last = $null; named = @{}; history = @(); log = @() } }
+    $state = Read-BicdopJson $path
+    if ($state.schema -ne 1 -or $state.named -isnot [Collections.IDictionary] -or $state.history -isnot [array]) {
+        throw "Invalid Bicdop session file: $path"
+    }
+    if ($state.log -isnot [array]) { $state.log = @() }
+    return $state
+}
+
+function Invoke-BicdopSessionWrite([scriptblock]$Change) {
+    $path = Get-BicdopSessionsPath
+    [void][IO.Directory]::CreateDirectory((Split-Path -LiteralPath $path))
+    $lock = $null
+    for ($attempt = 0; $attempt -lt 20 -and !$lock; $attempt++) {
+        try { $lock = [IO.File]::Open("$path.lock", 'OpenOrCreate', 'ReadWrite', 'None') }
+        catch [IO.IOException] { Start-Sleep -Milliseconds 25 }
+    }
+    if (!$lock) { throw 'Could not lock Bicdop session storage. Try again.' }
+    try {
+        $state = Read-BicdopSessions
+        & $Change $state
+        Save-BicdopJson $path $state
+    } finally {
+        $lock.Dispose()
     }
 }
 

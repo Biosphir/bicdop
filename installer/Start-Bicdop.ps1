@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $bundled = Join-Path $PSScriptRoot 'bundled/Bicdop.psd1'
 . (Join-Path $PSScriptRoot 'bundled/Update.ps1')
 $root = Get-BicdopManagedRoot
@@ -23,5 +23,5 @@ foreach ($manifest in @((Get-BicdopManagedModule $root $minimum).Path, $bundled)
         Write-Warning 'Could not load the downloaded version. Starting the bundled version.'
     }
 }
-Write-Host "Bicdop $((Get-Command bicdop).Module.Version). Type help for commands."
+Write-Host "Bicdop $((Get-Command bicdop).Module.Version). Type help for commands. Up Arrow recalls previous commands."
 bicdop
