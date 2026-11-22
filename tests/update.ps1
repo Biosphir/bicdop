@@ -32,7 +32,7 @@ try {
     $script:Release = @{
         tag_name = "v$latest"; assets = @(@{
             name = $name; state = 'uploaded'; size = (Get-Item -LiteralPath $script:Installer).Length
-            browser_download_url = "https://github.com/Biosphir/bicdop/releases/download/v$latest/$name"
+            browser_download_url = "https://github.com/$script:BicdopReleaseRepo/releases/download/v$latest/$name"
             digest = 'sha256:' + ('0' * 64)
         })
     }

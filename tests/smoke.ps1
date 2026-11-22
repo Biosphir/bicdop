@@ -28,7 +28,7 @@ function Set-TestConfig($CurrentModule) {
         function script:Confirm-Bicdop($Message) { return $Message -notlike 'Assign*' }
         function script:Get-BicdopDrives { return $script:TestRoot }
         function script:Invoke-RestMethod {
-            return @{ tag_name = 'v0.8.12'; body = 'Example release notes' }
+            return @{ tag_name = 'v0.8.13'; body = 'Example release notes' }
         }
     } $registry $root
 }
@@ -140,7 +140,7 @@ try {
     $update = bicdop update --check
     $version = bicdop version
     Assert-That ($version.Installed -eq $update.Installed -and $version.Latest -eq $update.Latest -and $version.UpdateAvailable) 'Version did not match update --check'
-    Assert-That ($update.Installed -eq '0.8.11' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    Assert-That ($update.Installed -eq '0.8.12' -and $update.UpdateAvailable) 'Update check returned the wrong version'
     Assert-Throws { bicdop update --yes } 'Usage: bicdop update'
     $projectMarker = Join-Path (Get-Location).Path '.bicdop'
     $originalId = (Get-Content -LiteralPath $projectMarker -Raw | ConvertFrom-Json).id

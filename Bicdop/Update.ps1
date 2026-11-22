@@ -1,4 +1,5 @@
-﻿$script:BicdopReleaseUri = 'https://api.github.com/repos/Biosphir/bicdop/releases/latest'
+﻿$script:BicdopReleaseRepo = 'Biosphir/bicdop-release'
+$script:BicdopReleaseUri = "https://api.github.com/repos/$script:BicdopReleaseRepo/releases/latest"
 $script:BicdopModuleFiles = @('Bicdop.psd1', 'Bicdop.psm1', 'Bicdop.Format.ps1xml', 'Registry.ps1', 'Update.ps1')
 
 function Get-BicdopManagedRoot {
@@ -37,9 +38,9 @@ function Install-BicdopRelease([version]$Current, [string]$Root) {
     $assets = @($latest.Release.assets | Where-Object { $_.name -ceq $name -and $_.state -eq 'uploaded' })
     if ($assets.Count -ne 1) { throw "Release $($latest.Version) does not contain $name." }
     $asset = $assets[0]
-    $expectedUrl = "https://github.com/Biosphir/bicdop/releases/download/$($latest.Release.tag_name)/$name"
+    $expectedUrl = "https://github.com/$script:BicdopReleaseRepo/releases/download/$($latest.Release.tag_name)/$name"
     if ($asset.browser_download_url -cne $expectedUrl -or $asset.digest -notmatch '^sha256:([a-f0-9]{64})$' -or
-        $asset.size -lt 1 -or $asset.size -gt 32MB) {
+        $asset.size -lt 1 -or $asset.size -gt 100MB) {
         throw 'The GitHub release asset has unexpected metadata.'
     }
     $expectedHash = $Matches[1]

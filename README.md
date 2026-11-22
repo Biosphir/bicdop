@@ -1,4 +1,4 @@
-# Bicdop 0.8.11
+# Bicdop 0.8.12
 
 ## Windows installer
 
@@ -18,6 +18,21 @@ installed. Attach only `BicdopSetup.exe` to the GitHub Release tagged
 `vVERSION`. The launcher verifies the SHA-256 digest from GitHub and extracts
 the module from that installer without rerunning setup. Users with launchers
 older than 0.8.11 need to run the new installer once to switch updater formats.
+
+The installer bundles GitHub CLI and MinGit for x64-compatible Windows.
+Open Bicdop from the Start menu and run `github --login`. Installed Git and
+GitHub CLI tools on PATH remain available. Project-specific SDKs and runtimes
+(such as Python, Go, or ESP-IDF) are separate.
+
+Uninstall removes the app, its bundled tools, the Windows Terminal profile,
+and Bicdop's local registry, session history, and downloaded modules.
+The marker prompt defaults to keeping project and workspace settings.
+Choose Yes to also remove valid markers in accessible registered workspaces
+and known project folders. Cleanup does not follow links or scan unrelated
+drives. It preserves project files, Git repositories, and shared GitHub credentials.
+
+Bundled dependency sources: [GitHub CLI v2.105.0](https://github.com/cli/cli/tree/v2.105.0)
+and [Git for Windows v2.56.1.windows.1](https://github.com/git-for-windows/git/tree/v2.56.1.windows.1).
 
 ## Source checkout
 
