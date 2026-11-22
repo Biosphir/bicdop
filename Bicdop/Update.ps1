@@ -33,13 +33,13 @@ function Install-BicdopRelease([version]$Current, [string]$Root) {
     if ($latest.Version -le $Current) {
         return [pscustomobject]@{ Version = $Current; Updated = $false }
     }
-    $name = "Bicdop-$($latest.Version)-module.zip"
+    $name = 'BicdopSetup.exe'
     $assets = @($latest.Release.assets | Where-Object { $_.name -ceq $name -and $_.state -eq 'uploaded' })
     if ($assets.Count -ne 1) { throw "Release $($latest.Version) does not contain $name." }
     $asset = $assets[0]
     $expectedUrl = "https://github.com/Biosphir/bicdop/releases/download/$($latest.Release.tag_name)/$name"
     if ($asset.browser_download_url -cne $expectedUrl -or $asset.digest -notmatch '^sha256:([a-f0-9]{64})$' -or
-        $asset.size -lt 1 -or $asset.size -gt 2MB) {
+        $asset.size -lt 1 -or $asset.size -gt 32MB) {
         throw 'The GitHub release asset has unexpected metadata.'
     }
     $expectedHash = $Matches[1]
@@ -56,26 +56,26 @@ function Install-BicdopRelease([version]$Current, [string]$Root) {
     $module = Join-Path $stage 'module'
     [void][IO.Directory]::CreateDirectory($module)
     try {
-        $archivePath = Join-Path $stage 'module.zip'
+        $installer = Join-Path $stage $name
         Write-Host "Downloading $name..."
-        Invoke-WebRequest -UseBasicParsing -Uri $expectedUrl -OutFile $archivePath -TimeoutSec 15 -ErrorAction Stop
+        Invoke-WebRequest -UseBasicParsing -Uri $expectedUrl -OutFile $installer -TimeoutSec 15 -ErrorAction Stop
         Write-Host "Verifying $name..."
-        if ((Get-Item -LiteralPath $archivePath).Length -ne $asset.size -or
-            (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ine $expectedHash) {
+        if ((Get-Item -LiteralPath $installer).Length -ne $asset.size -or
+            (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ine $expectedHash) {
             throw 'Bicdop download failed SHA-256 verification.'
         }
 
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
-        try {
-            if ($archive.Entries.Count -ne $script:BicdopModuleFiles.Count) { throw 'Unexpected contents in the Bicdop module ZIP.' }
-            foreach ($file in $script:BicdopModuleFiles) {
-                $entry = $archive.GetEntry($file)
-                if (!$entry -or $entry.Length -gt 2MB) { throw "Invalid or missing ZIP entry: $file" }
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $module $file))
-            }
-        } finally {
-            $archive.Dispose()
+        Write-Host "Extracting the Bicdop module from $name..."
+        $unusedInstallDirectory = Join-Path $stage 'unexpected-install'
+        $arguments = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS /DIR="{0}" /ExtractModule="{1}"' -f $unusedInstallDirectory, $module
+        $process = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+        # Returning False from Inno Setup's InitializeSetup reports exit code 1.
+        $files = @(Get-ChildItem -LiteralPath $module -File -Force)
+        if ($process.ExitCode -ne 1 -or $files.Count -ne $script:BicdopModuleFiles.Count) {
+            throw 'BicdopSetup.exe did not extract a complete update.'
+        }
+        foreach ($file in $script:BicdopModuleFiles) {
+            if (![IO.File]::Exists((Join-Path $module $file))) { throw "Missing update file: $file" }
         }
 
         $data = Import-PowerShellDataFile -LiteralPath (Join-Path $module 'Bicdop.psd1')

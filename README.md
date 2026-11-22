@@ -1,4 +1,4 @@
-# Bicdop 0.8.10
+# Bicdop 0.8.11
 
 ## Windows installer
 
@@ -14,9 +14,10 @@ existing terminal tab updates the title and restores it on exit.
 
 
 For maintainers, run installer/Build.ps1 -OutputDirectory PATH with Inno Setup 6
-installed. Attach BicdopSetup.exe and the generated Bicdop-VERSION-module.zip
-to the GitHub Release tagged vVERSION. Keep the ZIP name unchanged. The updater
-checks the SHA-256 digest from GitHub before installing the module.
+installed. Attach only `BicdopSetup.exe` to the GitHub Release tagged
+`vVERSION`. The launcher verifies the SHA-256 digest from GitHub and extracts
+the module from that installer without rerunning setup. Users with launchers
+older than 0.8.11 need to run the new installer once to switch updater formats.
 
 ## Source checkout
 

@@ -43,3 +43,31 @@ Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; Description: "Open Bicdo
 [UninstallDelete]
 Type: files; Name: "{localappdata}\Microsoft\Windows Terminal\Fragments\BIOSPHIR.Bicdop\bicdop.json"
 Type: dirifempty; Name: "{localappdata}\Microsoft\Windows Terminal\Fragments\BIOSPHIR.Bicdop"
+
+[Code]
+procedure ExportModuleFile(const Name, Destination: String);
+begin
+  ExtractTemporaryFile(Name);
+  if not FileCopy(ExpandConstant('{tmp}\') + Name, AddBackslash(Destination) + Name, True) then
+    RaiseException('Could not export ' + Name);
+end;
+
+function InitializeSetup: Boolean;
+var
+  Destination: String;
+begin
+  Destination := ExpandConstant('{param:ExtractModule|}');
+  Result := Destination = '';
+  if Result then
+    Exit;
+
+  { An update supplies an existing, empty staging folder. Returning False
+    after extraction skips installation, shortcuts, and registry changes. }
+  if not DirExists(Destination) then
+    RaiseException('Module staging directory does not exist.');
+  ExportModuleFile('Bicdop.psd1', Destination);
+  ExportModuleFile('Bicdop.psm1', Destination);
+  ExportModuleFile('Bicdop.Format.ps1xml', Destination);
+  ExportModuleFile('Registry.ps1', Destination);
+  ExportModuleFile('Update.ps1', Destination);
+end;
