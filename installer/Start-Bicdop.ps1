@@ -1,4 +1,6 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param([switch]$Agent, [string]$Directory)
+
+$ErrorActionPreference = 'Stop'
 $ghDirectory = Join-Path $PSScriptRoot 'tools/gh'
 $gitDirectory = Join-Path $PSScriptRoot 'tools/git/cmd'
 $bundledGit = Join-Path $gitDirectory 'git.exe'
@@ -21,12 +23,14 @@ $minimum = [version](Import-PowerShellDataFile -LiteralPath $bundled).ModuleVers
 $installed = Get-BicdopManagedModule $root $minimum
 $current = if ($installed) { $installed.Version } else { $minimum }
 
-Write-Host "Checking GitHub for Bicdop updates (current $current)..."
-try {
-    $result = Install-BicdopRelease $current $root
-    if ($result.Updated) { Write-Host "Installed Bicdop $($result.Version)." }
-} catch {
-    Write-Warning "Update skipped: $($_.Exception.Message)"
+if (!$Agent) {
+    Write-Host "Checking GitHub for Bicdop updates (current $current)..."
+    try {
+        $result = Install-BicdopRelease $current $root
+        if ($result.Updated) { Write-Host "Installed Bicdop $($result.Version)." }
+    } catch {
+        Write-Warning "Update skipped: $($_.Exception.Message)"
+    }
 }
 
 foreach ($manifest in @((Get-BicdopManagedModule $root $minimum).Path, $bundled) | Where-Object { $_ } | Select-Object -Unique) {
@@ -35,8 +39,9 @@ foreach ($manifest in @((Get-BicdopManagedModule $root $minimum).Path, $bundled)
         break
     } catch {
         if ($manifest -eq $bundled) { throw }
-        Write-Warning 'Could not load the downloaded version. Starting the bundled version.'
+        if (!$Agent) { Write-Warning 'Could not load the downloaded version. Starting the bundled version.' }
     }
 }
+if ($Agent) { bicdop agent serve; exit }
 Write-Host "Bicdop $((Get-Command bicdop).Module.Version). Type help for commands. Up Arrow recalls previous commands."
-bicdop
+if ($Directory) { bicdop --directory $Directory } else { bicdop }

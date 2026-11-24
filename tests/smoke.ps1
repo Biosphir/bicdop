@@ -28,7 +28,7 @@ function Set-TestConfig($CurrentModule) {
         function script:Confirm-Bicdop($Message) { return $Message -notlike 'Assign*' }
         function script:Get-BicdopDrives { return $script:TestRoot }
         function script:Invoke-RestMethod {
-            return @{ tag_name = 'v0.8.13'; body = 'Example release notes' }
+            return @{ tag_name = 'v0.8.15'; body = 'Example release notes' }
         }
     } $registry $root
 }
@@ -139,8 +139,20 @@ try {
     Assert-That ((Get-Location).Path -eq $relocated[0].Path) 'Switch failed after workspace relocation'
     $update = bicdop update --check
     $version = bicdop version
-    Assert-That ($version.Installed -eq $update.Installed -and $version.Latest -eq $update.Latest -and $version.UpdateAvailable) 'Version did not match update --check'
-    Assert-That ($update.Installed -eq '0.8.12' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    Assert-That ($version -eq $update.Installed -and $update.UpdateAvailable) 'Local version did not match update --check'
+    Assert-That ($update.Installed -eq '0.8.14' -and $update.UpdateAvailable) 'Update check returned the wrong version'
+    & (Get-Module Bicdop) {
+        function script:Invoke-RestMethod($Uri) {
+            if ($Uri -ne 'https://api.github.com/repos/Biosphir/bicdop-release/releases') { throw 'Checked an unexpected release endpoint.' }
+            return @{ tag_name = 'v0.8.12'; prerelease = $true; body = 'Preview' }
+        }
+    }
+    $preview = bicdop update --check
+    Assert-That ($preview.Latest -eq '0.8.12' -and $preview.Channel -eq 'Prerelease' -and !$preview.UpdateAvailable) 'Prerelease comparison was incorrect'
+    & (Get-Module Bicdop) {
+        function script:Invoke-RestMethod { throw 'The local version command must not use the network.' }
+    }
+    Assert-That ((bicdop version) -eq '0.8.14') 'Offline version command failed'
     Assert-Throws { bicdop update --yes } 'Usage: bicdop update'
     $projectMarker = Join-Path (Get-Location).Path '.bicdop'
     $originalId = (Get-Content -LiteralPath $projectMarker -Raw | ConvertFrom-Json).id

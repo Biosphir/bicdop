@@ -1,4 +1,4 @@
-# Bicdop 0.8.12
+# Bicdop 0.8.14
 
 ## Windows installer
 
@@ -33,6 +33,19 @@ drives. It preserves project files, Git repositories, and shared GitHub credenti
 
 Bundled dependency sources: [GitHub CLI v2.105.0](https://github.com/cli/cli/tree/v2.105.0)
 and [Git for Windows v2.56.1.windows.1](https://github.com/git-for-windows/git/tree/v2.56.1.windows.1).
+
+Full Installation adds **Open in Bicdop** to the folder context menu in File
+Explorer. It opens the selected directory without restoring an older location.
+
+## Cluster and Blueprint
+
+See [Cluster and Blueprint](README.Cluster.md) for the Agent and Controller setup,
+Blueprint resources, approved remote diagnostics, and a two-PC walkthrough.
+
+## Automation
+
+See [Bicdop Automation](README.Automation.md) for Node job registration,
+scheduling, reporting, and the simulated email archiver.
 
 ## Source checkout
 
@@ -183,7 +196,10 @@ server for the same document root and runtime. Use `bicdop stop [PROJECT]` in
 the same PowerShell session to stop it.
 
 Use bicdop project --main to print the entry point saved in the current folder's marker.
-Use bicdop version to check the installed and latest stable versions without applying an update.
+Use `bicdop version` to show the loaded module version offline. Use
+`bicdop update --check` to compare it with the latest published release in
+`Biosphir/bicdop-release`, including prereleases. Startup updates and
+`update --apply` install stable releases only.
 
 Use bicdop project --list to show direct files and folders, including hidden items.
 
@@ -259,6 +275,13 @@ uses the owner from your signed-in GitHub CLI account. Clone skips existing
 destination paths. Run `plant` inside the new folder if you want it registered
 as a Bicdop project.
 
+Use `github --clone --all` to preview repositories owned by the active GitHub
+CLI account and clone them into the active workspace after confirmation.
+It uses GitHub CLI credentials for HTTPS and skips existing destination paths.
+Use `github --fetch --all` to refresh GitHub origins for local Git roots inside
+the workspace. Both commands continue after individual failures and summarize
+which work succeeded. Fetch updates remote-tracking refs without merging.
+
 Run github --status from a Git project root to check its GitHub origin, working
 tree, and latest branch commit. It queries GitHub without fetching objects.
 Synced means the working tree is clean and the local commit matches GitHub.
@@ -300,6 +323,12 @@ or ping HOST --count NUMBER to send a specific number of requests.
 Use github --workspace to run the same status checks for all Git project
 roots inside the active workspace, including nested repositories. It does
 not change the current folder, stage files, or fetch commits.
+
+Use `github --workspace --pull` to preview clean GitHub repositories in the
+active workspace. With confirmation, Bicdop fetches each branch that tracks
+`origin` and applies fast-forwards only. It skips branches with local changes,
+no upstream, or commits that cannot be fast-forwarded. A failure in one
+repository does not stop the batch.
 
 Use github --workspace --publish to preview repositories with publishable
 changes and confirm once. Bicdop then stages, commits as needed, and pushes

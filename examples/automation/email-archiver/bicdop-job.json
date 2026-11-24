@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "id": "email-archiver",
+  "version": "1.0.0",
+  "runtime": "python",
+  "entry": "main.py",
+  "arguments": [],
+  "timeoutSeconds": 60,
+  "description": "Simulated mailbox quota and archive reporting"
+}

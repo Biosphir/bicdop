@@ -27,7 +27,7 @@ try {
     $gitUri = 'https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip'
     $gh = Get-BicdopBuildDependency $ghUri '8813a72c899900afaa10e3fec8fbc64b908c89dbfe837e95ed2fa500fc140627' (Join-Path $stage 'gh')
     $git = Get-BicdopBuildDependency $gitUri '4a92850b6e917da4fd010669b614b55dccf5b0ec333a534cc4be4700dfefdafd' (Join-Path $stage 'git')
-    $icon = Join-Path $repo 'assets/logo-bicdop-favicon-ico.ico'
+    $icon = Join-Path $repo 'assets/logo-bicdop-windows.ico'
     $launcher = Join-Path $stage 'Bicdop.exe'
     & $compiler /nologo /target:exe /optimize "/out:$launcher" "/win32icon:$icon" (Join-Path $PSScriptRoot 'Launcher.cs')
     if ($LASTEXITCODE) { throw 'Bicdop launcher compilation failed.' }

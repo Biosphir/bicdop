@@ -14,7 +14,7 @@ DefaultDirName={localappdata}\Programs\Bicdop
 DefaultGroupName=Bicdop
 PrivilegesRequired=lowest
 OutputBaseFilename=BicdopSetup
-SetupIconFile=..\assets\logo-bicdop-favicon-ico.ico
+SetupIconFile=..\assets\logo-bicdop-windows.ico
 UninstallDisplayIcon={app}\Bicdop.exe
 ArchitecturesAllowed=x64compatible
 Compression=lzma2
@@ -28,24 +28,37 @@ Source: "..\Bicdop\Bicdop.Format.ps1xml"; DestDir: "{app}\bundled"; Flags: ignor
 Source: "..\Bicdop\Registry.ps1"; DestDir: "{app}\bundled"; Flags: ignoreversion
 Source: "..\Bicdop\Update.ps1"; DestDir: "{app}\bundled"; Flags: ignoreversion
 Source: "Uninstall-BicdopData.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#GhPath}\bin\gh.exe"; DestDir: "{app}\tools\gh"; Flags: ignoreversion
-Source: "{#GhPath}\LICENSE"; DestDir: "{app}\tools\gh"; Flags: ignoreversion
-Source: "{#GitPath}\*"; DestDir: "{app}\tools\git"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#GhPath}\bin\gh.exe"; DestDir: "{app}\tools\gh"; Flags: ignoreversion; Components: full
+Source: "{#GhPath}\LICENSE"; DestDir: "{app}\tools\gh"; Flags: ignoreversion; Components: full
+Source: "{#GitPath}\*"; DestDir: "{app}\tools\git"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: full
 Source: "{#LauncherPath}"; DestDir: "{app}"; DestName: "Bicdop.exe"; Flags: ignoreversion
 Source: "Start-Bicdop.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Install-TerminalProfile.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\logo-bicdop-favicon.png"; DestDir: "{app}"; Flags: ignoreversion
 
+[Types]
+Name: "full"; Description: "Full installation"
+Name: "agent"; Description: "Cluster Agent only"
+
+[Components]
+Name: "core"; Description: "Bicdop runtime and Cluster Agent"; Types: full agent; Flags: fixed
+Name: "full"; Description: "Interactive Bicdop, Controller, Git and GitHub CLI"; Types: full
+
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked; Components: full
 
 [Icons]
-Name: "{group}\Bicdop"; Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; WorkingDir: "{userdocs}"
-Name: "{userdesktop}\Bicdop"; Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; WorkingDir: "{userdocs}"; Tasks: desktopicon
+Name: "{group}\Bicdop"; Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; WorkingDir: "{userdocs}"; Components: full
+Name: "{userdesktop}\Bicdop"; Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; WorkingDir: "{userdocs}"; Tasks: desktopicon; Components: full
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Bicdop"; ValueType: string; ValueData: "Open in Bicdop"; Flags: uninsdeletekey; Components: full
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Bicdop"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Bicdop.exe"",0"; Components: full
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Bicdop\command"; ValueType: string; ValueData: """{app}\Bicdop.exe"" --directory ""%1\."""; Components: full
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File ""{app}\Install-TerminalProfile.ps1"""; Flags: runhidden waituntilterminated
-Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; Description: "Open Bicdop"; WorkingDir: "{userdocs}"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File ""{app}\Install-TerminalProfile.ps1"""; Flags: runhidden waituntilterminated; Components: full
+Filename: "{app}\Bicdop.exe"; Parameters: "--terminal"; Description: "Open Bicdop"; WorkingDir: "{userdocs}"; Flags: nowait postinstall skipifsilent; Components: full
 
 [UninstallDelete]
 Type: files; Name: "{localappdata}\Microsoft\Windows Terminal\Fragments\BIOSPHIR.Bicdop\bicdop.json"

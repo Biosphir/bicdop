@@ -7,11 +7,28 @@ function Get-BicdopManagedRoot {
 }
 
 function Get-BicdopRelease {
-    $release = Invoke-RestMethod -Uri $script:BicdopReleaseUri -TimeoutSec 8 -ErrorAction Stop
+    try { $release = Invoke-RestMethod -Uri $script:BicdopReleaseUri -TimeoutSec 8 -ErrorAction Stop }
+    catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+            throw "No stable release is available in $script:BicdopReleaseRepo. Use update --check to see published prereleases."
+        }
+        throw
+    }
     if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v?(?<version>\d+\.\d+\.\d+)$') {
         throw 'GitHub did not return a supported stable Bicdop release.'
     }
     [pscustomobject]@{ Version = [version]$Matches.version; Release = $release }
+}
+
+function Get-BicdopPublishedReleases {
+    $uri = "https://api.github.com/repos/$script:BicdopReleaseRepo/releases"
+    $published = Invoke-RestMethod -Uri $uri -TimeoutSec 8 -ErrorAction Stop
+    $releases = foreach ($release in $published) {
+        if (!$release.draft -and $release.tag_name -match '^v?(?<version>\d+\.\d+\.\d+)$') {
+            [pscustomobject]@{ Version = [version]$Matches.version; Release = $release }
+        }
+    }
+    $releases | Sort-Object Version -Descending
 }
 
 function Get-BicdopManagedModule([string]$Root, [version]$Minimum) {

@@ -1065,6 +1065,14 @@ function Show-BicdopGitHubStatus([string]$Path = '.') {
     return [pscustomobject]$status
 }
 
+function Get-BicdopWorkspaceGitFolders([string]$Root) {
+    Find-BicdopFolders @($Root) {
+        param($folder)
+        !$folder.FullName.Equals($Root, $script:PathComparison) -and
+            (Test-Path -LiteralPath (Join-Path $folder.FullName '.git'))
+    } | Sort-Object FullName
+}
+
 function Show-BicdopWorkspaceGitHubStatus {
     $active = Get-BicdopActive (Read-BicdopRegistry)
     $root = (Get-BicdopFolder $active.path).FullName
@@ -1072,11 +1080,7 @@ function Show-BicdopWorkspaceGitHubStatus {
         throw 'Git was not found on PATH.'
     }
     Write-Host "Looking for Git repositories in '$($active.name)'..."
-    $repos = @(Find-BicdopFolders @($root) {
-        param($folder)
-        !$folder.FullName.Equals($root, $script:PathComparison) -and
-            (Test-Path -LiteralPath (Join-Path $folder.FullName '.git'))
-    } | Sort-Object FullName)
+    $repos = @(Get-BicdopWorkspaceGitFolders $root)
     if (!$repos.Count) {
         Write-BicdopResult 'No Git repository roots found inside the active workspace.'
         return
@@ -1180,6 +1184,133 @@ function Publish-BicdopWorkspace {
     Write-BicdopResult "Workspace publish finished: $published published, $skipped skipped, $failed failed."
 }
 
+function Get-BicdopWorkspacePullTarget([string]$Path) {
+    $repository = Get-BicdopGitRepository $Path
+    $git = $repository.Git
+    $root = $repository.Root
+    $ErrorActionPreference = 'Continue'
+    $origin = Get-BicdopGitHubUrl $root
+    if (!$origin) { throw 'No GitHub origin.' }
+
+    $branch = & $git -C $root symbolic-ref --quiet --short HEAD 2>$null
+    if (!$branch) { throw 'Detached HEAD.' }
+    $head = & $git -C $root rev-parse --verify HEAD 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'The local branch has no commits.' }
+    $trackingRemote = & $git -C $root config --get "branch.$branch.remote" 2>$null
+    $ref = & $git -C $root config --get "branch.$branch.merge" 2>$null
+    if ($trackingRemote -cne 'origin' -or @($ref).Count -ne 1 -or $ref -cnotlike 'refs/heads/*') {
+        throw 'The current branch must track a branch on origin.'
+    }
+
+    $statePaths = @(& $git -C $root rev-parse --path-format=absolute --git-path MERGE_HEAD --git-path CHERRY_PICK_HEAD --git-path REVERT_HEAD --git-path rebase-apply --git-path rebase-merge --git-path sequencer --git-path BISECT_START 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not check for a Git operation in progress.' }
+    if ($statePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1) {
+        throw 'A Git operation is in progress.'
+    }
+    $changes = @(& $git --no-optional-locks -C $root status --porcelain=v1 --untracked-files=all --ignore-submodules=none 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the local working tree.' }
+    if ($changes.Count) { throw 'The working tree has staged, unstaged, or untracked changes.' }
+
+    [pscustomobject]@{ Path = $root; Git = $git; Origin = $origin; Branch = $branch; Ref = $ref; Head = $head }
+}
+
+function Update-BicdopWorkspacePullTarget($Target) {
+    $ErrorActionPreference = 'Continue'
+    $git = $Target.Git
+    $root = $Target.Path
+    $ref = $Target.Ref
+    $temporaryRef = 'refs/bicdop/pull/' + [guid]::NewGuid().ToString('N')
+    try {
+        $current = Get-BicdopWorkspacePullTarget $root
+        if ($current.Origin -ine $Target.Origin -or $current.Branch -cne $Target.Branch -or
+            $current.Ref -cne $ref -or $current.Head -cne $Target.Head) {
+            throw 'The branch, commit, or remote changed after the preview.'
+        }
+        & $git -C $root -c credential.interactive=never -c http.lowSpeedLimit=1 -c http.lowSpeedTime=10 fetch --progress --no-tags --no-recurse-submodules --no-write-fetch-head origin "${ref}:$temporaryRef" | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw 'Fetch failed. Check access and connectivity.' }
+        $tip = & $git -C $root rev-parse --verify "$temporaryRef^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the fetched commit.' }
+
+        $current = Get-BicdopWorkspacePullTarget $root
+        if ($current.Origin -ine $Target.Origin -or $current.Branch -cne $Target.Branch -or
+            $current.Ref -cne $ref -or $current.Head -cne $Target.Head) {
+            throw 'The branch, commit, or remote changed during fetch.'
+        }
+        if ($tip -ceq $current.Head) { return 'Current' }
+        & $git -C $root merge-base --is-ancestor $current.Head $tip 2>$null
+        $ancestorExit = $LASTEXITCODE
+        if ($ancestorExit -eq 1) { return 'NotFastForward' }
+        if ($ancestorExit -ne 0) { throw 'Could not verify fast-forward ancestry.' }
+
+        & $git -C $root -c merge.autostash=false -c submodule.recurse=false merge --ff-only --no-overwrite-ignore $tip | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw 'Fast-forward failed. Check the repository working tree.' }
+        return 'Updated'
+    } finally {
+        & $git -C $root update-ref -d $temporaryRef 2>$null
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Could not remove temporary ref '$temporaryRef' in '$root'." }
+    }
+}
+
+function Pull-BicdopWorkspace {
+    $active = Get-BicdopActive (Read-BicdopRegistry)
+    $root = (Get-BicdopFolder $active.path).FullName
+    $targets = [Collections.Generic.List[object]]::new()
+    $skipped = 0
+    Write-Host "Checking Git repositories in '$($active.name)' for local changes..."
+    foreach ($folder in @(Get-BicdopWorkspaceGitFolders $root)) {
+        try { $targets.Add((Get-BicdopWorkspacePullTarget $folder.FullName)) }
+        catch {
+            Write-Host "Skipping '$($folder.FullName)': $($_.Exception.Message)"
+            $skipped++
+        }
+    }
+    if (!$targets.Count) {
+        Write-BicdopResult "Nothing to pull. $skipped skipped."
+        return
+    }
+
+    Write-Host "Ready to fetch and check $($targets.Count) repositories for fast-forward:"
+    foreach ($target in $targets) {
+        Write-Host "  $($target.Path) [$($target.Branch)] <- $($target.Origin) [$($target.Ref)]"
+    }
+    if (!(Confirm-Bicdop 'Fetch and fast-forward the eligible branches in this workspace?')) {
+        Write-BicdopResult 'Workspace pull cancelled.'
+        return
+    }
+
+    $updated = 0
+    $current = 0
+    $failed = 0
+    $previousPrompt = [Environment]::GetEnvironmentVariable('GIT_TERMINAL_PROMPT', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', '0', 'Process')
+        for ($i = 0; $i -lt $targets.Count; $i++) {
+            $target = $targets[$i]
+            $label = "$($i + 1)/$($targets.Count): $($target.Path)"
+            Write-Host "[$label] Fetching $($target.Branch)..."
+            Write-Progress -Activity 'Pulling workspace repositories' -Status $label -PercentComplete (100 * $i / $targets.Count)
+            try {
+                switch (Update-BicdopWorkspacePullTarget $target) {
+                    'Updated' { $updated++ }
+                    'Current' { Write-Host 'Already up to date.'; $current++ }
+                    'NotFastForward' { Write-Host 'Skipped: the local branch is ahead or has diverged.'; $skipped++ }
+                }
+            } catch {
+                Write-Warning "Could not pull '$($target.Path)': $($_.Exception.Message)"
+                $failed++
+            }
+        }
+    } finally {
+        if ($null -eq $previousPrompt) {
+            [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', [NullString]::Value, 'Process')
+        } else {
+            [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', $previousPrompt, 'Process')
+        }
+        Write-Progress -Activity 'Pulling workspace repositories' -Completed
+    }
+    Write-BicdopResult "Workspace pull finished: $updated updated, $current already current, $skipped skipped, $failed failed."
+}
+
 function Invoke-BicdopGitHubRelease([object[]]$Options) {
     $usage = 'Usage: github --release TAG [FILE ...] | --release --view TAG | --release --upload TAG FILE [...] | --release --publish TAG'
     if (!$Options.Count) { throw $usage }
@@ -1266,10 +1397,12 @@ function Invoke-BicdopGitHubAuth([string]$Action) {
     }
 }
 
-function Invoke-BicdopGitHubClone([string]$Repository, [string]$Account) {
-    $workspace = Get-BicdopActive (Read-BicdopRegistry)
-    $root = (Get-BicdopFolder $workspace.path).FullName
-    $repo = $Repository -replace '^https://github\.com/', '' -replace '\.git$', ''
+function Invoke-BicdopGitHubClone([string]$Repository, [string]$Account, [string]$Root, [switch]$UseGitHubCli) {
+    if (!$Root) {
+        $workspace = Get-BicdopActive (Read-BicdopRegistry)
+        $Root = (Get-BicdopFolder $workspace.path).FullName
+    }
+    $repo = if ($UseGitHubCli) { $Repository } else { $Repository -replace '^https://github\.com/', '' -replace '\.git$', '' }
     if ($repo -notmatch '^(?:[A-Za-z0-9-]+/)?[A-Za-z0-9_.-]+$') {
         throw 'Use a GitHub repo name, OWNER/REPO, or https://github.com/OWNER/REPO.'
     }
@@ -1291,7 +1424,10 @@ function Invoke-BicdopGitHubClone([string]$Repository, [string]$Account) {
     $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (!$git) { throw 'Git was not found on PATH.' }
     Write-Host "Cloning $repo into '$destination'..."
-    & $git.Source clone --progress -- "https://github.com/$repo.git" $destination
+    $credentials = if ($UseGitHubCli) {
+        '-c', 'credential.https://github.com.helper=', '-c', 'credential.https://github.com.helper=!gh auth git-credential'
+    }
+    & $git.Source @credentials clone --progress -- "https://github.com/$repo.git" $destination
     if ($LASTEXITCODE -ne 0) { throw "Clone failed for '$repo' (exit code $LASTEXITCODE)." }
     Write-BicdopResult "Cloned $repo into '$destination'. Use plant from that folder to register it as a Bicdop project."
 }
@@ -1335,21 +1471,118 @@ function Invoke-BicdopGitHubCreate([object[]]$Options, [string]$Account) {
     Write-BicdopResult "Created GitHub repository: $url"
 }
 
-function Show-BicdopGitHubRepositories([string]$Account) {
+function Get-BicdopOwnedGitHubRepositories([string]$Account) {
     if (!$Account) { throw 'No verified GitHub CLI account. Run github --login first.' }
     $gh = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     Write-Host "Fetching repositories owned by '$Account'..."
     $rows = @(& $gh api --hostname github.com 'user/repos?affiliation=owner&per_page=100' --paginate --jq '.[] | [.full_name, .visibility, .html_url] | @tsv')
     if ($LASTEXITCODE -ne 0) { throw "Could not fetch repositories for '$Account'. Check your connection and permissions." }
-    if (!$rows.Count) { Write-BicdopResult "No repositories found for '$Account'."; return }
     foreach ($row in $rows) {
         $name, $visibility, $url = $row -split "`t", 3
         [pscustomobject][ordered]@{ Repository = $name; Visibility = $visibility; Url = $url }
     }
-    Write-BicdopResult "Found $($rows.Count) repositories for '$Account'."
 }
 
-function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget, [string]$Account) {
+function Show-BicdopGitHubRepositories([string]$Account) {
+    $repos = @(Get-BicdopOwnedGitHubRepositories $Account)
+    $repos
+    Write-BicdopResult "Found $($repos.Count) repositories for '$Account'."
+}
+
+function Invoke-BicdopGitHubCloneAll([string]$Account) {
+    $active = Get-BicdopActive (Read-BicdopRegistry)
+    $root = (Get-BicdopFolder $active.path).FullName
+    if (!(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw 'Git was not found on PATH.'
+    }
+
+    $pending = @()
+    $skipped = 0
+    foreach ($repo in (Get-BicdopOwnedGitHubRepositories $Account | Sort-Object Repository -Unique)) {
+        $parts = $repo.Repository -split '/', 2
+        if ($parts.Count -ne 2 -or $parts[0] -ine $Account -or
+            $parts[1] -notmatch '^[A-Za-z0-9_.-]+$' -or $parts[1].EndsWith('.') -or
+            $parts[1] -match '^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
+            Write-Warning "Skipping '$($repo.Repository)': unsupported repository name."
+            $skipped++
+            continue
+        }
+        $destination = Join-Path $root $parts[1]
+        if (Test-Path -LiteralPath $destination) {
+            Write-Host "Skipping '$($repo.Repository)': '$destination' already exists."
+            $skipped++
+            continue
+        }
+        $pending += $repo.Repository
+    }
+    if (!$pending.Count) {
+        Write-BicdopResult "Clone complete. 0 cloned, $skipped skipped, 0 failed."
+        return
+    }
+
+    Write-Host "Repositories to clone into '$root':"
+    foreach ($repo in $pending) { Write-Host "  $repo" }
+    if (!(Confirm-Bicdop "Clone $($pending.Count) repositories from '$Account'?")) {
+        Write-BicdopResult 'Clone cancelled.'
+        return
+    }
+
+    $cloned = 0
+    $failed = 0
+    try {
+        for ($i = 0; $i -lt $pending.Count; $i++) {
+            $repo = $pending[$i]
+            $label = "$($i + 1)/$($pending.Count): $repo"
+            Write-Host "[$label]"
+            Write-Progress -Activity 'Cloning GitHub repositories' -Status $label -PercentComplete (100 * $i / $pending.Count)
+            try {
+                Invoke-BicdopGitHubClone $repo $Account -Root $root -UseGitHubCli
+                $cloned++
+            } catch {
+                Write-Warning "Could not clone '$repo': $($_.Exception.Message)"
+                $failed++
+            }
+        }
+    } finally { Write-Progress -Activity 'Cloning GitHub repositories' -Completed }
+    Write-BicdopResult "Clone complete. $cloned cloned, $skipped skipped, $failed failed."
+}
+
+function Invoke-BicdopGitHubFetchAll {
+    $active = Get-BicdopActive (Read-BicdopRegistry)
+    $root = (Get-BicdopFolder $active.path).FullName
+    if (!(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw 'Git was not found on PATH.'
+    }
+    Write-Host "Looking for Git repositories in '$($active.name)'..."
+    $repos = @(Get-BicdopWorkspaceGitFolders $root)
+    $fetched = 0
+    $skipped = 0
+    $failed = 0
+    try {
+        for ($i = 0; $i -lt $repos.Count; $i++) {
+            $repo = $repos[$i]
+            $label = "$($i + 1)/$($repos.Count): $($repo.Name)"
+            Write-Host "[$label]"
+            Write-Progress -Activity 'Fetching GitHub repositories' -Status $label -CurrentOperation $repo.FullName -PercentComplete (100 * $i / $repos.Count)
+            if (!(Get-BicdopGitHubUrl $repo.FullName)) {
+                Write-Host "Skipping '$($repo.FullName)': no GitHub origin."
+                $skipped++
+                continue
+            }
+
+            try {
+                Invoke-BicdopGitHub @('--fetch') -Path $repo.FullName
+                $fetched++
+            } catch {
+                Write-Warning "Could not fetch '$($repo.FullName)': $($_.Exception.Message)"
+                $failed++
+            }
+        }
+    } finally { Write-Progress -Activity 'Fetching GitHub repositories' -Completed }
+    Write-BicdopResult "Fetch complete. $fetched fetched, $skipped skipped, $failed failed."
+}
+
+function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget, [string]$Account, [string]$Path = '.') {
     $action = $Options[0]
     if ($action -eq '--create') {
         Invoke-BicdopGitHubCreate $Options $Account
@@ -1367,15 +1600,21 @@ function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget, [string]$Accou
     }
     if ($action -eq '--clone') {
         if ($Options.Count -ne 2 -or [string]::IsNullOrWhiteSpace($Options[1])) {
-            throw 'Usage: bicdop github --clone REPO | OWNER/REPO | GITHUB-URL'
+            throw 'Usage: bicdop github --clone REPO | OWNER/REPO | GITHUB-URL | --all'
         }
-        Invoke-BicdopGitHubClone $Options[1] $Account
+        if ($Options[1] -eq '--all') { Invoke-BicdopGitHubCloneAll $Account }
+        else { Invoke-BicdopGitHubClone $Options[1] $Account }
+        return
+    }
+    if ($action -eq '--fetch' -and $Options.Count -eq 2 -and $Options[1] -eq '--all') {
+        Invoke-BicdopGitHubFetchAll
         return
     }
     if ($action -eq '--workspace') {
         if ($Options.Count -eq 2 -and $Options[1] -eq '--publish') { Publish-BicdopWorkspace }
+        elseif ($Options.Count -eq 2 -and $Options[1] -eq '--pull') { Pull-BicdopWorkspace }
         elseif ($Options.Count -eq 1) { Show-BicdopWorkspaceGitHubStatus }
-        else { throw 'Usage: bicdop github --workspace [--publish]' }
+        else { throw 'Usage: bicdop github --workspace [--publish | --pull]' }
         return
     }
     if ($action -eq '--release') {
@@ -1390,7 +1629,7 @@ function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget, [string]$Accou
         ($action -in '--stage','--unstage' -and ($Options.Count -lt 2 -or ('--all' -in $Options -and $Options.Count -ne 2))) -or
         ($action -eq '--diff' -and ($Options.Count -gt 2 -or ($Options.Count -eq 2 -and $Options[1] -ne '--staged'))) -or
         ($action -notin '--commit','--stage','--unstage','--diff' -and $Options.Count -ne 1 -and !$quickPush)) {
-        throw 'Usage: bicdop github --login | --logout | --account | --list | --create --repo NAME | --create --local NAME | --status | --clone REPO | --workspace | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch | --pull | --push | --publish. Use --all with --stage or --unstage.'
+        throw 'Usage: bicdop github --login | --logout | --account | --list | --create --repo NAME | --create --local NAME | --status | --clone REPO or --all | --workspace | --stage FILE [...] | --unstage FILE [...] | --diff [--staged] | --commit "MESSAGE" | --fetch [--all] | --pull | --push | --publish. Use --all with --stage or --unstage.'
     }
     if ($action -eq '--status') {
         Write-Host 'Checking the local working tree and GitHub branch...'
@@ -1398,7 +1637,7 @@ function Invoke-BicdopGitHub([object[]]$Options, $ExpectedTarget, [string]$Accou
         return
     }
 
-    $repository = Get-BicdopGitRepository
+    $repository = Get-BicdopGitRepository $Path
     $ErrorActionPreference = 'Continue'
     if ($action -in '--fetch','--pull','--push') {
         $originUrl = Get-BicdopGitHubUrl $repository.Root
@@ -1857,8 +2096,8 @@ function Get-BicdopLatestRelease([object[]]$Options) {
         throw 'Usage: bicdop update [--check | --apply]'
     }
     $installed = $ExecutionContext.SessionState.Module.Version
-    Write-Host 'Checking the latest stable Bicdop release...'
     if ($Options[0] -eq '--apply') {
+        Write-Host 'Checking the latest stable Bicdop release...'
         $root = Get-BicdopManagedRoot
         $managed = Get-BicdopManagedModule $root $installed
         $current = if ($managed) { $managed.Version } else { $installed }
@@ -1872,9 +2111,18 @@ function Get-BicdopLatestRelease([object[]]$Options) {
         }
         return
     }
-    $release = Get-BicdopRelease
-    [pscustomobject]@{ Installed = $installed.ToString(); Latest = $release.Version.ToString()
-        UpdateAvailable = $release.Version -gt $installed; Notes = $release.Release.body }
+    Write-Host "Checking releases in $script:BicdopReleaseRepo..."
+    $releases = @(Get-BicdopPublishedReleases)
+    $latest = $releases | Select-Object -First 1
+    $stable = $releases | Where-Object { !$_.Release.prerelease } | Select-Object -First 1
+    [pscustomobject][ordered]@{
+        Installed = $installed.ToString()
+        Latest = if ($latest) { $latest.Version.ToString() } else { 'None published' }
+        Channel = if ($latest) { if ($latest.Release.prerelease) { 'Prerelease' } else { 'Stable' } } else { 'None' }
+        LatestStable = if ($stable) { $stable.Version.ToString() } else { 'None published' }
+        UpdateAvailable = [bool]($stable -and $stable.Version -gt $installed)
+        Notes = if ($latest) { $latest.Release.body }
+    }
 }
 
 function ConvertFrom-BicdopInput([string]$Line, [switch]$PreserveQuotes) {
@@ -2099,7 +2347,7 @@ function Invoke-BicdopSession([object[]]$Options) {
     }
 }
 
-function Start-BicdopShell {
+function Start-BicdopShell([switch]$KeepLocation) {
     $rawUI = $Host.UI.RawUI
     $interactiveConsole = $Host.Name -eq 'ConsoleHost' -and $rawUI -and
         ![Console]::IsInputRedirected -and ![Console]::IsOutputRedirected
@@ -2118,7 +2366,7 @@ function Start-BicdopShell {
         try {
             $saved = Read-BicdopSessions
             $history = @($saved.history | Where-Object { $_ -is [string] })
-            $null = Restore-BicdopSession $saved.last
+            if (!$KeepLocation) { $null = Restore-BicdopSession $saved.last }
         } catch {
             Write-Warning "Could not restore the last Bicdop session: $($_.Exception.Message)"
         }
@@ -2272,12 +2520,1590 @@ function Invoke-BicdopPing([object[]]$Options) {
     if ($LASTEXITCODE -ne 0) { throw "Ping to '$target' failed. Check the host and your connection." }
 }
 
+# Cluster state is separate from the workspace registry and command history.
+function Get-BicdopClusterFile([string]$Name) {
+    Join-Path (Split-Path -LiteralPath $script:RegistryPath) $Name
+}
+
+function Read-BicdopCluster {
+    $path = Get-BicdopClusterFile 'fleet.json'
+    if (![IO.File]::Exists($path)) { return @{ schema = 1; devices = @{}; agent = @{} } }
+    $state = Read-BicdopJson $path
+    if ($state.schema -ne 1 -or $state.devices -isnot [Collections.IDictionary] -or
+        $state.agent -isnot [Collections.IDictionary]) { throw 'Invalid Cluster registry.' }
+    return $state
+}
+
+function Update-BicdopCluster([scriptblock]$Change) {
+    $path = Get-BicdopClusterFile 'fleet.json'
+    [void][IO.Directory]::CreateDirectory((Split-Path -LiteralPath $path))
+    $lock = [IO.File]::Open("$path.lock", 'OpenOrCreate', 'ReadWrite', 'None')
+    try {
+        $state = Read-BicdopCluster
+        & $Change $state
+        Save-BicdopJson $path $state
+    } finally { $lock.Dispose() }
+}
+
+function Write-BicdopClusterAudit([string]$Action, [string]$Target, [string]$Result, [string]$Id) {
+    $path = Get-BicdopClusterFile 'cluster-audit.jsonl'
+    [void][IO.Directory]::CreateDirectory((Split-Path -LiteralPath $path))
+    $lock = [IO.File]::Open("$path.lock", 'OpenOrCreate', 'ReadWrite', 'None')
+    try {
+        $record = @{ utc = [datetime]::UtcNow.ToString('o'); action = $Action; target = $Target; result = $Result; id = $Id }
+        [IO.File]::AppendAllText($path, (ConvertTo-Json -InputObject $record -Compress) + [Environment]::NewLine)
+    } finally { $lock.Dispose() }
+}
+
+function Get-BicdopBlueprintPath([string]$Name) {
+    if ($Name -notmatch '^[a-z][a-z0-9-]{0,62}$') { throw 'Use a Blueprint name such as developer-pc.' }
+    Join-Path (Get-BicdopClusterFile 'Blueprints') "$Name.blueprint.yaml"
+}
+
+function Assert-BicdopBlueprintFields($Object, [string[]]$Fields) {
+    if ($Object -isnot [Collections.IDictionary]) { throw 'Expected a Blueprint object.' }
+    foreach ($key in $Object.Keys) {
+        if ($key -cnotin $Fields) { throw "Unknown Blueprint field: $key" }
+    }
+}
+
+function Get-BicdopBlueprintResources($Document) {
+    Assert-BicdopBlueprintFields $Document @('apiVersion','kind','metadata','spec')
+    if ($Document.apiVersion -cne 'bicdop.io/v1' -or $Document.kind -cne 'Blueprint') { throw 'Expected a bicdop.io/v1 Blueprint.' }
+    Assert-BicdopBlueprintFields $Document.metadata @('name','description')
+    $null = Get-BicdopBlueprintPath $Document.metadata.name
+    Assert-BicdopBlueprintFields $Document.spec @('resources')
+    $resources = $Document.spec.resources
+    if ($resources -isnot [array] -or $resources.Count -gt 100) { throw 'Blueprint resources must be an array of at most 100 items.' }
+    $byId = @{}
+    $targets = @{}
+    foreach ($resource in $resources) {
+        Assert-BicdopBlueprintFields $resource @('id','type','path','name','value','dependsOn')
+        if ($resource.id -isnot [string] -or $resource.id -notmatch '^[a-z][a-z0-9-]{0,62}$' -or $byId.ContainsKey($resource.id)) {
+            throw 'Blueprint resource IDs must be valid and unique.'
+        }
+        if ($resource.type -isnot [string]) { throw 'Blueprint resources require a type.' }
+        switch -Exact ($resource.type) {
+            { $_ -cin 'directory','file' } {
+                if ($resource.path -isnot [string] -or $resource.path -notmatch '^[A-Za-z0-9_. -]+(?:[\\/][A-Za-z0-9_. -]+)*$') {
+                    throw "Resource '$($resource.id)' requires a relative path."
+                }
+                foreach ($part in ($resource.path -split '[\\/]')) {
+                    if ($part.StartsWith('.') -or
+                        $part -match '^\s|[ .]$|^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
+                        throw "Unsafe path in resource '$($resource.id)'."
+                    }
+                }
+                if ($resource.type -ceq 'file' -and ($resource.value -isnot [string] -or $resource.value.Length -gt 8192)) {
+                    throw "File resource '$($resource.id)' requires text of at most 8192 characters."
+                }
+                $key = 'path:' + $resource.path.Replace('\','/')
+            }
+            'automation' {
+                $null = Get-BicdopAutomationId $resource.name
+                Assert-BicdopBlueprintFields $resource.value @('enabled','time','timezone','day')
+                if ($resource.value.enabled -isnot [bool]) { throw 'Automation policy requires an enabled boolean.' }
+                $null = Get-BicdopAutomationSchedule $resource.value.time $resource.value.timezone $resource.value.day
+                $key = "automation:$($resource.name)"
+            }
+            'environment' {
+                if ($resource.name -cnotmatch '^BICDOP_[A-Z0-9_]+$' -or $resource.value -isnot [string] -or
+                    ($resource.value.Length -lt 1 -or $resource.value.Length -gt 2048) -or $resource.value.IndexOf([char]0) -ge 0) {
+                    throw 'Environment resources require a BICDOP_ variable and a value up to 2048 characters.'
+                }
+                $key = "env:$($resource.name)"
+            }
+            { $_ -cin 'package','service','tool','workspace' } {
+                if ($resource.name -isnot [string] -or $resource.name -notmatch '^[A-Za-z0-9_.-]{1,80}$') {
+                    throw "Resource '$($resource.id)' requires a simple name."
+                }
+                $key = "$($resource.type):$($resource.name)"
+            }
+            default { throw "Unknown resource type: $($resource.type)" }
+        }
+        if ($targets.ContainsKey($key)) { throw "Multiple resources target '$key'." }
+        $targets[$key] = $true
+        if ($resource.ContainsKey('dependsOn') -and $resource.dependsOn -isnot [array]) { throw 'dependsOn must be an array of resource IDs.' }
+        $byId[$resource.id] = $resource
+    }
+
+    $ordered = [Collections.Generic.List[object]]::new()
+    $resolved = @{}
+    while ($ordered.Count -lt $resources.Count) {
+        $before = $ordered.Count
+        foreach ($resource in $resources) {
+            if ($resolved.ContainsKey($resource.id)) { continue }
+            $ready = $true
+            if ($resource.dependsOn) {
+                foreach ($dependency in $resource.dependsOn) {
+                    if ($dependency -isnot [string] -or !$byId.ContainsKey($dependency)) {
+                        throw "Unknown dependency for '$($resource.id)'."
+                    }
+                    if (!$resolved.ContainsKey($dependency)) { $ready = $false }
+                }
+            }
+            if ($ready) {
+                $ordered.Add($resource)
+                $resolved[$resource.id] = $true
+            }
+        }
+        if ($ordered.Count -eq $before) { throw 'Blueprint contains a dependency cycle.' }
+    }
+    return $ordered.ToArray()
+}
+
+function Resolve-BicdopBlueprintResourcePath([string]$Root, [string]$Relative) {
+    $full = [IO.Path]::GetFullPath((Join-Path $Root $Relative))
+    if (!(Test-BicdopUnder $full $Root) -or $full.Equals($Root, $script:PathComparison)) {
+        throw 'Blueprint path escapes the approved root.'
+    }
+    for ($cursor = $full; $cursor; $cursor = [IO.Path]::GetDirectoryName($cursor)) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Blueprint paths cannot traverse links or junctions.'
+        }
+    }
+    return $full
+}
+
+function Invoke-BicdopBlueprintResource($Resource, [string]$Root, [bool]$Apply) {
+    switch -Exact ($Resource.type) {
+        'directory' {
+            $path = Resolve-BicdopBlueprintResourcePath $Root $Resource.path
+            if ([IO.Directory]::Exists($path)) { return 'Compliant' }
+            if ([IO.File]::Exists($path)) { throw 'A file occupies the directory path.' }
+            if (!$Apply) { return 'Changes required' }
+            [void][IO.Directory]::CreateDirectory($path)
+            if (![IO.Directory]::Exists($path)) { throw 'Directory creation could not be verified.' }
+        }
+        'file' {
+            $path = Resolve-BicdopBlueprintResourcePath $Root $Resource.path
+            if ([IO.File]::Exists($path)) {
+                $existing = [IO.FileInfo]::new($path)
+                if ($existing.Length -gt 65536) { throw 'Existing file exceeds the Blueprint text limit.' }
+                if ([IO.File]::ReadAllText($path) -ceq $Resource.value) { return 'Compliant' }
+            }
+            if ([IO.Directory]::Exists($path)) { throw 'A directory occupies the file path.' }
+            if (!$Apply) { return 'Changes required' }
+            $temp = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+            try {
+                [IO.File]::WriteAllText($temp, $Resource.value)
+                if ([IO.File]::Exists($path)) { [IO.File]::Replace($temp, $path, [NullString]::Value) }
+                else { [IO.File]::Move($temp, $path) }
+            } finally { [IO.File]::Delete($temp) }
+            if ([IO.File]::ReadAllText($path) -cne $Resource.value) { throw 'File content could not be verified.' }
+        }
+        'automation' { return Invoke-BicdopAutomationPolicy $Resource $Apply }
+        'environment' {
+            if ([Environment]::GetEnvironmentVariable($Resource.name, 'User') -ceq $Resource.value) { return 'Compliant' }
+            if (!$Apply) { return 'Changes required' }
+            [Environment]::SetEnvironmentVariable($Resource.name, $Resource.value, 'User')
+            if ([Environment]::GetEnvironmentVariable($Resource.name, 'User') -cne $Resource.value) { throw 'Environment variable could not be verified.' }
+        }
+        'tool' {
+            if (Get-Command $Resource.name -CommandType Application -ErrorAction SilentlyContinue) { return 'Compliant' }
+            return 'Unsupported'
+        }
+        'workspace' {
+            if ((Read-BicdopRegistry).workspaces.Values | Where-Object name -eq $Resource.name | Select-Object -First 1) { return 'Compliant' }
+            return 'Unsupported'
+        }
+        'service' {
+            $service = Get-Service -Name $Resource.name -ErrorAction SilentlyContinue
+            if ($service -and $service.Status -eq 'Running') { return 'Compliant' }
+            return 'Unsupported'
+        }
+        'package' {
+            $locations = @(
+                'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/*'
+                'HKLM:/Software/Microsoft/Windows/CurrentVersion/Uninstall/*'
+                'HKLM:/Software/WOW6432Node/Microsoft/Windows/CurrentVersion/Uninstall/*'
+            )
+            if (Get-ItemProperty -Path $locations -Name DisplayName -ErrorAction SilentlyContinue |
+                Where-Object DisplayName -eq $Resource.name | Select-Object -First 1) { return 'Compliant' }
+            return 'Unsupported'
+        }
+    }
+    return 'Changed'
+}
+
+function Invoke-BicdopBlueprintEngine($Document, [string]$Root, [switch]$Apply) {
+    $resources = @(Get-BicdopBlueprintResources $Document)
+    $rootPath = (Get-BicdopFolder $Root).FullName
+    $null = Resolve-BicdopBlueprintResourcePath $rootPath '.bicdop-path-check'
+    $status = @{}
+    foreach ($resource in $resources) {
+        $detail = ''
+        if (@($resource.dependsOn | Where-Object { $_ -and $status[$_] -in 'Failed','Skipped','Unsupported' }).Count) {
+            $result = 'Skipped'
+            $detail = 'A dependency could not be satisfied.'
+        } else {
+            try { $result = Invoke-BicdopBlueprintResource $resource $rootPath ([bool]$Apply) }
+            catch { $result = 'Failed'; $detail = $_.Exception.Message }
+        }
+        $status[$resource.id] = $result
+        [pscustomobject]@{ Resource = $resource.id; Type = $resource.type; Status = $result; Detail = $detail }
+    }
+}
+
+function Get-BicdopAgentStatus($Agent) {
+    [pscustomobject]@{
+        DeviceId = $Agent.id
+        Hostname = [Environment]::MachineName
+        Version = "$($ExecutionContext.SessionState.Module.Version)"
+        OS = [Environment]::OSVersion.VersionString
+        Enabled = [bool]$Agent.enabled
+        Capabilities = @('status','plan','apply','exec') + $(if ($Agent.allowUpdates) { 'update' })
+    }
+}
+
+function Invoke-BicdopAgentOperation($Request, $Agent) {
+    Assert-BicdopBlueprintFields $Request @('protocol','id','deviceId','operation','blueprint','command','automation')
+    if (!$Agent.enabled) { throw 'Agent is disabled. Enable it on this computer first.' }
+    if ($Request.protocol -ne 1 -or $Request.id -notmatch '^[0-9a-f]{32}$') { throw 'Invalid Cluster request.' }
+    if ($Request.operation -cne 'status' -and $Request.deviceId -cne $Agent.id) { throw 'Device identity does not match.' }
+    if ($Request.operation -ceq 'update' -and !$Agent.allowUpdates) { throw 'Remote Agent updates are disabled on this device.' }
+    if ($Request.operation -cin 'apply','update') {
+        Update-BicdopCluster {
+            param($state)
+            if (!$state.agent.enabled -or $state.agent.id -cne $Request.deviceId) { throw 'Agent approval changed.' }
+            if ($Request.operation -ceq 'update' -and !$state.agent.allowUpdates) { throw 'Remote Agent updates are disabled.' }
+            if ($Request.id -in $state.agent.requests) { throw 'This request ID was already processed.' }
+            $state.agent.requests = @(@($state.agent.requests | Where-Object { $_ } | Select-Object -Last 255) + $Request.id)
+        }
+    }
+
+    if ($Request.operation -cin 'plan','apply') {
+        foreach ($resource in @(Get-BicdopBlueprintResources $Request.blueprint | Where-Object type -eq 'automation')) {
+            $null = Assert-BicdopRemoteAutomation $resource.name $Agent
+        }
+    }
+    switch -Exact ($Request.operation) {
+        'automation' {
+            $payload = $Request.automation
+            if ($payload.action -ceq 'deploy') {
+                Assert-BicdopBlueprintFields $payload @('action','hash','data')
+                return Install-BicdopAutomationArtifact $payload.hash $payload.data $true $Agent
+            }
+            Assert-BicdopBlueprintFields $payload @('action','name','time','zone','day','runId')
+            return Invoke-BicdopAutomationAction $payload.action $payload.name $Request.id $payload.time $payload.zone $payload.day $Agent $payload.runId
+        }
+        'status' { return Get-BicdopAgentStatus $Agent }
+        'plan' { return Invoke-BicdopBlueprintEngine $Request.blueprint $Agent.root }
+        'apply' { return Invoke-BicdopBlueprintEngine $Request.blueprint $Agent.root -Apply }
+        'update' {
+            $managed = Get-BicdopManagedRoot
+            return Install-BicdopRelease $ExecutionContext.SessionState.Module.Version $managed 6>$null
+        }
+        'exec' {
+            $ErrorActionPreference = 'Continue'
+            switch -Exact ($Request.command) {
+                'git status' {
+                    $tool = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+                    $output = @(& $tool --no-optional-locks -C $Agent.root -c core.fsmonitor=false -c core.untrackedCache=false status --short --branch --ignore-submodules=all 2>&1)
+                }
+                'git --version' {
+                    $tool = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+                    $output = @(& $tool --version 2>&1)
+                }
+                'python --version' {
+                    $tool = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+                    $output = @(& $tool -I --version 2>&1)
+                }
+                default { throw 'Agent allows git status, git --version, and python --version only.' }
+            }
+            $code = $LASTEXITCODE
+            $stdout = ($output | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] }) -join "`n"
+            $stderr = ($output | Where-Object { $_ -is [Management.Automation.ErrorRecord] }) -join "`n"
+            [pscustomobject]@{
+                ExitCode = $code
+                Stdout = $stdout.Substring(0, [Math]::Min(12000, $stdout.Length))
+                Stderr = $stderr.Substring(0, [Math]::Min(4000, $stderr.Length))
+                Truncated = $stdout.Length -gt 12000 -or $stderr.Length -gt 4000
+            }
+        }
+        default { throw 'Unsupported Agent operation.' }
+    }
+}
+
+function Start-BicdopAgentRequest {
+    [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+    $line = [Text.StringBuilder]::new()
+    while ($line.Length -le 65536) {
+        $code = [Console]::Read()
+        if ($code -lt 0 -or $code -eq 10) { break }
+        [void]$line.Append([char]$code)
+    }
+    $line = $line.ToString().TrimStart([char]0xfeff)
+    if (!$line -or $line.Length -gt 65536) { throw 'Invalid Agent request length.' }
+    $request = Convert-BicdopJsonValue (ConvertFrom-Json -InputObject $line -ErrorAction Stop)
+    $agent = (Read-BicdopCluster).agent
+    $state = 'Failed'
+    $result = @()
+    $detail = ''
+    try {
+        $result = @(Invoke-BicdopAgentOperation $request $agent)
+        if (@($result | Where-Object { $_.Status -in 'Failed','Unsupported','Skipped' -or ($null -ne $_.ExitCode -and $_.ExitCode -ne 0) }).Count) {
+            $state = 'Incomplete'
+        } else { $state = 'Completed' }
+    } catch { $detail = $_.Exception.Message }
+    $action = if ($request.operation -cin 'status','plan','apply','exec','update','automation') { $request.operation } else { 'invalid' }
+    $id = if ($request.id -match '^[0-9a-f]{32}$') { $request.id } else { '' }
+    if ($action -in 'apply','exec','update','automation') { Write-BicdopClusterAudit "agent-$action" $agent.id $state $id }
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    [Console]::WriteLine((ConvertTo-Json -InputObject @{
+        protocol = 1; id = $id; deviceId = $agent.id; status = $state; result = $result; error = $detail
+    } -Depth 12 -Compress))
+}
+
+function Invoke-BicdopClusterTransport($Device, $Request) {
+    $port = 0
+    if ($Device.host -isnot [string] -or $Device.user -isnot [string] -or $Device.key -isnot [string] -or
+        $Device.host -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' -or $Device.user -notmatch '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$' -or
+        ![int]::TryParse([string]$Device.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535 -or $Device.key -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+$') {
+        throw 'Invalid SSH endpoint in Cluster inventory.'
+    }
+    $ssh = (Get-Command ssh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $hostsFile = [IO.Path]::GetTempFileName()
+    $configFile = "$hostsFile.conf"
+    try {
+        $address = if ($port -eq 22) { $Device.host } else { "[$($Device.host)]:$port" }
+        [IO.File]::WriteAllText($hostsFile, "$address $($Device.key)`n")
+        $config = @(
+            'Host *'
+            '    BatchMode yes'
+            '    PreferredAuthentications publickey'
+            '    StrictHostKeyChecking yes'
+            '    GlobalKnownHostsFile NUL'
+            ('    UserKnownHostsFile "{0}"' -f $hostsFile.Replace('\','/'))
+            '    HostKeyAlgorithms ssh-ed25519'
+            '    UpdateHostKeys no'
+            '    ClearAllForwardings yes'
+            '    ConnectTimeout 5'
+        )
+        if ($Device.identityFile) {
+            $identityFile = [string]$Device.identityFile
+            if ($identityFile -match '[%"\p{Cc}]' -or ![IO.File]::Exists($identityFile)) { throw 'The Cluster SSH identity file is invalid or missing.' }
+            $config += '    IdentitiesOnly yes'
+            $config += ('    IdentityFile "{0}"' -f $identityFile.Replace('\','/'))
+        }
+        [IO.File]::WriteAllLines($configFile, $config)
+        $processInfo = [Diagnostics.ProcessStartInfo]::new()
+        $processInfo.FileName = $ssh
+        $processInfo.Arguments = '-F "{0}" -T -s -p {1} {2}@{3} bicdop' -f $configFile, $port, $Device.user, $Device.host
+        $processInfo.UseShellExecute = $false
+        $processInfo.RedirectStandardInput = $true
+        $processInfo.RedirectStandardOutput = $true
+        $processInfo.RedirectStandardError = $true
+        $processInfo.StandardOutputEncoding = [Text.Encoding]::UTF8
+        $processInfo.CreateNoWindow = $true
+        $payload = ConvertTo-Json -InputObject $Request -Compress -Depth 12
+        if ($payload.Length -gt 65536) { throw 'Cluster request exceeds 64 KiB.' }
+        $process = [Diagnostics.Process]::Start($processInfo)
+        try {
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $bytes = [Text.Encoding]::UTF8.GetBytes($payload + "`n")
+            $process.StandardInput.BaseStream.Write($bytes,0,$bytes.Length)
+            $process.StandardInput.Close()
+            $timeout = if ($Request.operation -eq 'update') { 180 } else { 30 }
+            if (!$process.WaitForExit(1000 * $timeout)) { throw "Agent request timed out after $timeout seconds." }
+            if ($process.ExitCode -ne 0) {
+                $detail = $stderr.GetAwaiter().GetResult().Trim()
+                throw "SSH request failed ($($process.ExitCode)). $detail"
+            }
+            $reply = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json -ErrorAction Stop
+            if ($reply.protocol -ne 1 -or $reply.id -cne $Request.id -or
+                ($Device.deviceId -and $reply.deviceId -cne $Device.deviceId)) {
+                throw 'Agent reply did not match the request or approved device.'
+            }
+            if ($reply.status -notin 'Completed','Incomplete','Failed') { throw 'Invalid Agent reply status.' }
+            return $reply
+        } finally {
+            if (!$process.HasExited) { $process.Kill() }
+            $process.Dispose()
+        }
+    } finally {
+        [IO.File]::Delete($hostsFile)
+        [IO.File]::Delete($configFile)
+    }
+}
+
+function Select-BicdopClusterDevices([string]$Selector) {
+    $state = Read-BicdopCluster
+    $devices = @($state.devices.Values | Where-Object state -eq 'Approved' | Sort-Object name)
+    if ($Selector -eq 'all') { return $devices }
+    if ($Selector -like 'node:*') { return $devices | Where-Object name -eq $Selector.Substring(5) }
+    if ($Selector -like 'group:*') {
+        $group = $Selector.Substring(6)
+        return $devices | Where-Object { $_.group -eq $group }
+    }
+    return $devices | Where-Object name -eq $Selector
+}
+
+function Invoke-BicdopClusterBatch([string]$Selector, [string]$Operation, $Document, [string]$Command, $Automation, [switch]$Quiet) {
+    $devices = @(Select-BicdopClusterDevices $Selector)
+    if (!$devices.Count) { throw 'No approved devices match the target.' }
+    $action = if ($Document) { "blueprint-${Operation}:$($Document.metadata.name)" } else { "cluster-$Operation" }
+    $counts = @{ Completed = 0; Incomplete = 0; Failed = 0; Unreachable = 0 }
+    for ($index = 0; $index -lt $devices.Count; $index++) {
+        $device = $devices[$index]
+        $id = [guid]::NewGuid().ToString('N')
+        $request = @{ protocol = 1; id = $id; deviceId = $device.deviceId; operation = $Operation }
+        if ($Document) { $request.blueprint = $Document }
+        if ($Command) { $request.command = $Command }
+        if ($Automation) { $request.automation = $Automation }
+        if (!$Quiet) { Write-Host "[$($index + 1)/$($devices.Count)] $Operation on '$($device.name)'..." }
+        $rows = @()
+        $message = ''
+        $reachable = $false
+        try {
+            $current = (Read-BicdopCluster).devices[$device.name]
+            if (!$current -or $current.state -ne 'Approved' -or $current.deviceId -cne $device.deviceId -or
+                $current.fingerprint -cne $device.fingerprint -or $current.host -cne $device.host -or
+                $current.user -cne $device.user -or $current.port -ne $device.port -or $current.identityFile -cne $device.identityFile) {
+                throw 'Device approval changed after the batch started.'
+            }
+            $reply = Invoke-BicdopClusterTransport $device $request
+            $reachable = $true
+            $status = $reply.status
+            $rows = @($reply.result)
+            $message = $reply.error
+        } catch {
+            $status = 'Unreachable'
+            $message = $_.Exception.Message
+        }
+        if ($Operation -notin 'plan','status') { Write-BicdopClusterAudit $action $device.name $status $id }
+        if ($Operation -eq 'status') {
+            Update-BicdopCluster {
+                param($state)
+                $record = $state.devices[$device.name]
+                if ($record -and $record.deviceId -eq $device.deviceId -and $record.state -eq 'Approved') {
+                    $record.health = if ($reachable -and $status -eq 'Completed') { 'Online' } elseif ($reachable) { 'Degraded' } else { 'Unreachable' }
+                    if ($reachable) { $record.lastSeen = [datetime]::UtcNow.ToString('o') }
+                    if ($rows.Count -and $status -eq 'Completed') { $record.version = [string]$rows[0].Version }
+                }
+            }
+        }
+        $counts[$status]++
+        [pscustomobject]@{ Device = $device.name; Id = $id; Status = $status; Result = $rows; Error = $message }
+    }
+    if (!$Quiet) { Write-BicdopResult "Cluster ${Operation}: $($counts.Completed) completed, $($counts.Incomplete) incomplete, $($counts.Failed) failed, $($counts.Unreachable) unreachable." }
+}
+
+function Invoke-BicdopCluster([object[]]$Options) {
+    $action = [string]$Options[0]
+    $name = [string]$Options[1]
+    if ($action -in 'add','approve','inspect','revoke','remove','group','assign' -and $name -notmatch '^[a-z][a-z0-9-]{0,62}$') {
+        throw 'Use a device name such as pc-01.'
+    }
+    switch ($action) {
+        'key' {
+            if ($Options.Count -ne 1) { throw 'Usage: cluster key' }
+            New-BicdopControllerKey
+        }
+        'add' {
+            if ($Options.Count -notin 5,6,7) { throw 'Usage: cluster add NAME HOST SSH-USER HOST-KEY.pub [PORT [IDENTITY-FILE]]' }
+            $endpoint = [string]$Options[2]
+            $user = [string]$Options[3]
+            $port = 22
+            if ($endpoint -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' -or $user -notmatch '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$' -or
+                ($Options.Count -ge 6 -and (![int]::TryParse([string]$Options[5], [ref]$port) -or ($port -lt 1 -or $port -gt 65535)))) {
+                throw 'Enter an IPv4 address or hostname, a dedicated SSH user, and an optional valid port.'
+            }
+            $identityFile = ''
+            if ($Options.Count -eq 7) {
+                $identity = Get-Item -LiteralPath ([string]$Options[6]) -ErrorAction Stop
+                if ($identity -isnot [IO.FileInfo] -or $identity.FullName -match '[%"\p{Cc}]' -or
+                    ($identity.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    throw 'Choose a regular OpenSSH identity file.'
+                }
+                $identityFile = $identity.FullName
+            }
+            $file = Get-Item -LiteralPath ([string]$Options[4]) -ErrorAction Stop
+            if ($file -isnot [IO.FileInfo] -or $file.Length -gt 2048) { throw 'Expected an OpenSSH Ed25519 host public key file.' }
+            $key = [IO.File]::ReadAllText($file.FullName).Trim()
+            if ($key -notmatch '^ssh-ed25519 ([A-Za-z0-9+/=]+)(?: [^\r\n]*)?$') { throw 'Expected an OpenSSH Ed25519 host public key.' }
+            $encoded = $Matches[1]
+            $keyBlob = [Convert]::FromBase64String($encoded)
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try { $fingerprint = 'SHA256:' + [Convert]::ToBase64String($hasher.ComputeHash($keyBlob)).TrimEnd('=') }
+            finally { $hasher.Dispose() }
+            Update-BicdopCluster {
+                param($state)
+                if ($state.devices.ContainsKey($name)) { throw 'Device name already exists. Revoke and remove it before adding a replacement.' }
+                $state.devices[$name] = @{ name = $name; host = $endpoint; user = $user; port = $port; key = "ssh-ed25519 $encoded"; fingerprint = $fingerprint; identityFile = $identityFile; state = 'Pending' }
+            }
+            Write-BicdopClusterAudit 'cluster-add' $name 'Pending' ''
+            Write-Host "Pending device '$name'. Verify host fingerprint out of band: $fingerprint"
+        }
+        'approve' {
+            $device = (Read-BicdopCluster).devices[$name]
+            if (!$device -or $device.state -ne 'Pending') { throw 'Approval requires a pending device.' }
+            Write-Host "$($device.host):$($device.port) $($device.fingerprint)"
+            if (!(Confirm-Bicdop 'Approve this device after verifying its host fingerprint?')) { return }
+            $request = @{ protocol = 1; id = [guid]::NewGuid().ToString('N'); operation = 'status' }
+            $reply = Invoke-BicdopClusterTransport $device $request
+            $info = $reply.result | Select-Object -First 1
+            $id = [guid]::Empty
+            if ($reply.status -ne 'Completed' -or !$info.Enabled -or ![guid]::TryParse([string]$info.DeviceId,[ref]$id) -or
+                $info.DeviceId -cne $reply.deviceId) { throw 'The Agent did not return a valid enabled device identity.' }
+            Update-BicdopCluster {
+                param($state)
+                $candidate = $state.devices[$name]
+                if (!$candidate -or $candidate.state -ne 'Pending' -or $candidate.fingerprint -cne $device.fingerprint -or
+                    $candidate.host -cne $device.host -or $candidate.port -ne $device.port -or $candidate.user -cne $device.user -or
+                    $candidate.identityFile -cne $device.identityFile) {
+                    throw 'Device enrollment changed during approval.'
+                }
+                $candidate.state = 'Approved'
+                $candidate.deviceId = $id.ToString()
+                $candidate.hostname = [string]$info.Hostname
+                $candidate.version = [string]$info.Version
+                $candidate.os = [string]$info.OS
+                $candidate.capabilities = @($info.Capabilities)
+                $candidate.health = 'Online'
+                $candidate.lastSeen = [datetime]::UtcNow.ToString('o')
+            }
+            Write-BicdopClusterAudit 'cluster-approve' $name 'Approved' $request.id
+            Write-Host "Approved '$name'."
+        }
+        'update' {
+            if ($Options.Count -eq 1) { throw 'Specify an approved device or use cluster update --cluster all.' }
+            $selector = if ($Options.Count -eq 3 -and $name -eq '--cluster') { [string]$Options[2] }
+                        elseif ($Options.Count -eq 2 -and $name -ne '--cluster') { $name }
+                        else { throw 'Usage: cluster update DEVICE | cluster update --cluster all' }
+            if (Confirm-Bicdop "Send verified module updates sequentially to '$selector'? Agents must opt in.") {
+                Invoke-BicdopClusterBatch $selector 'update'
+            }
+        }
+        'check' {
+            $selector = if ($name) { $name } else { 'all' }
+            foreach ($device in @(Select-BicdopClusterDevices $selector)) {
+                if (!$device.blueprint) {
+                    [pscustomobject]@{ Device = $device.name; Status = 'Skipped'; Error = 'No Blueprint assignment.' }
+                    continue
+                }
+                try {
+                    $document = Read-BicdopJson (Get-BicdopBlueprintPath $device.blueprint)
+                    $null = @(Get-BicdopBlueprintResources $document)
+                    Invoke-BicdopClusterBatch $device.name 'plan' $document
+                } catch {
+                    [pscustomobject]@{ Device = $device.name; Status = 'Failed'; Error = $_.Exception.Message }
+                }
+            }
+        }
+        { $_ -in 'remove','revoke','group','assign' } {
+            if ($action -eq 'group' -and ($Options.Count -ne 3 -or $Options[2] -notmatch '^[a-z][a-z0-9-]{0,62}$')) {
+                throw 'Usage: cluster group DEVICE GROUP'
+            }
+            if ($action -eq 'assign') {
+                if ($Options.Count -ne 3) { throw 'Usage: cluster assign DEVICE BLUEPRINT' }
+                $path = Get-BicdopBlueprintPath ([string]$Options[2])
+                if (![IO.File]::Exists($path)) { throw 'Blueprint does not exist.' }
+            }
+            if ($action -eq 'remove' -and !(Confirm-Bicdop "Remove '$name' from this controller inventory?")) { return }
+            Update-BicdopCluster {
+                param($state)
+                $record = $state.devices[$name]
+                if (!$record) { throw 'Device not found.' }
+                switch ($action) {
+                    'remove' { $state.devices.Remove($name) }
+                    'revoke' { $record.state = 'Revoked' }
+                    'group' { $record.group = [string]$Options[2] }
+                    'assign' { $record.blueprint = [string]$Options[2] }
+                }
+            }
+            Write-BicdopClusterAudit "cluster-$action" $name 'Completed' ''
+        }
+        'list' {
+            (Read-BicdopCluster).devices.Values | Sort-Object name | ForEach-Object {
+                [pscustomobject]@{ Name = $_.name; Host = $_.host; State = $_.state; Group = $_.group; Health = $_.health; LastSeen = $_.lastSeen }
+            }
+        }
+        'inspect' {
+            $device = (Read-BicdopCluster).devices[$name]
+            if (!$device) { throw 'Device not found.' }
+            [pscustomobject]$device
+        }
+        { $_ -in 'status','health' } {
+            $selector = if ($name) { $name } else { 'all' }
+            Invoke-BicdopClusterBatch $selector 'status'
+        }
+        'audit' {
+            $path = Get-BicdopClusterFile 'cluster-audit.jsonl'
+            if ([IO.File]::Exists($path)) { Get-Content -LiteralPath $path -Tail 100 | ForEach-Object { ConvertFrom-Json $_ } }
+        }
+        default { throw 'Usage: cluster list | add NAME HOST USER KEY [PORT] | approve DEVICE | revoke DEVICE | remove DEVICE | group DEVICE GROUP | assign DEVICE BLUEPRINT | inspect DEVICE | status [TARGET] | check [TARGET] | update TARGET | audit' }
+    }
+}
+
+function ConvertTo-BicdopClusterIPv4([string]$Address) {
+    $ip = $null
+    if ($Address -notmatch '^\d{1,3}(?:\.\d{1,3}){3}$' -or
+        ![Net.IPAddress]::TryParse($Address, [ref]$ip) -or
+        $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or $ip.ToString() -cne $Address -or
+        [Net.IPAddress]::IsLoopback($ip) -or $ip.GetAddressBytes()[0] -in 0,255 -or $ip.GetAddressBytes()[0] -ge 224) {
+        throw 'Enter the Controller IPv4 address, for example 192.168.1.10.'
+    }
+    $ip.ToString()
+}
+
+function ConvertTo-BicdopClusterPublicKey([string]$Content) {
+    if ($Content.Trim() -cnotmatch '^ssh-ed25519 ([A-Za-z0-9+/=]{60,100})(?: [^\r\n]*)?$') {
+        throw 'Expected a single OpenSSH Ed25519 public key (.pub).'
+    }
+    $encoded = $Matches[1]
+    $blob = [Convert]::FromBase64String($encoded)
+    if ($blob.Length -ne 51 -or [Convert]::ToBase64String($blob) -cne $encoded -or
+        [Convert]::ToBase64String($blob[0..18]) -cne 'AAAAC3NzaC1lZDI1NTE5AAAAIA==') {
+        throw 'The Ed25519 public key is malformed.'
+    }
+    "ssh-ed25519 $encoded"
+}
+
+function Get-BicdopClusterIPv4 {
+    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.AddressState -eq 'Preferred' } |
+        Select-Object -ExpandProperty IPAddress -Unique
+}
+
+function New-BicdopClusterSshConfig([string]$Root, [string]$HostKey, [string]$PowerShell) {
+    $runner = (Join-Path $Root 'Run-Agent.ps1').Replace('\','/')
+    $authorizedKeys = (Join-Path $Root 'authorized_keys').Replace('\','/')
+    $shell = $PowerShell.Replace('\','/')
+    $command = '"{0}" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{1}"' -f $shell,$runner
+    @(
+        '# Managed by Bicdop Cluster Agent Setup.'
+        'Port 22'
+        'AddressFamily inet'
+        ('HostKey "{0}"' -f $HostKey.Replace('\','/'))
+        'AllowUsers bicdopagent'
+        'PubkeyAuthentication yes'
+        'PasswordAuthentication no'
+        'KbdInteractiveAuthentication no'
+        'AuthenticationMethods publickey'
+        'PermitTTY no'
+        'DisableForwarding yes'
+        'PermitUserEnvironment no'
+        ('AuthorizedKeysFile "{0}"' -f $authorizedKeys)
+        "Subsystem bicdop $command"
+        "ForceCommand $command"
+    )
+}
+
+function New-BicdopClusterAcl([string]$AgentSid, [switch]$Write, [switch]$Public, [switch]$File) {
+    $acl = if ($File) { [Security.AccessControl.FileSecurity]::new() } else { [Security.AccessControl.DirectorySecurity]::new() }
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    $inheritance = if ($File) { 'None' } else { 'ContainerInherit,ObjectInherit' }
+    $permissions = [ordered]@{ 'S-1-5-18'='FullControl'; 'S-1-5-32-544'='FullControl' }
+    $permissions[$AgentSid] = if ($Write) { 'Modify' } else { 'ReadAndExecute' }
+    if ($Public) { $permissions['S-1-5-32-545'] = 'ReadAndExecute' }
+    foreach ($id in $permissions.Keys) {
+        $sid = [Security.Principal.SecurityIdentifier]::new($id)
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,$permissions[$id],$inheritance,'None','Allow'))
+    }
+    $acl
+}
+
+function Invoke-BicdopManagedAgentSetup($Settings) {
+    $ErrorActionPreference = 'Stop'
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if ($PSVersionTable.PSEdition -ne 'Desktop' -or !$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Run Agent setup through the Windows administrator approval prompt.'
+    }
+    if ($Settings.Action -eq 'Revoke') {
+        $root = Join-Path $env:ProgramData 'BicdopClusterAgent'
+        $directory = Get-BicdopFolder $root
+        $acl = [IO.Directory]::GetAccessControl($directory.FullName)
+        if (!$acl.AreAccessRulesProtected -or $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') {
+            throw 'The managed Agent directory is not owned and protected by Windows Administrators.'
+        }
+        $info = Read-BicdopJson (Join-Path $root 'enrollment.json')
+        $configPath = Join-Path $env:ProgramData 'ssh/sshd_config'
+        if (!(Test-Path -LiteralPath $configPath) -or
+            (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash -cne $info.configHash) {
+            throw 'The OpenSSH configuration changed. Disable the Agent using the manual Cluster guide.'
+        }
+        Disable-LocalUser -Name 'bicdopagent'
+        Disable-NetFirewallRule -Name 'Bicdop-Cluster-Agent-In-TCP'
+        Set-Service -Name sshd -StartupType Disabled
+        Stop-Service -Name sshd
+        Write-Host 'Managed Cluster Agent access was revoked.'
+        return
+    }
+    $controller = ConvertTo-BicdopClusterIPv4 $Settings.Controller
+    $key = ConvertTo-BicdopClusterPublicKey $Settings.PublicKey
+    $root = Join-Path $env:ProgramData 'BicdopClusterAgent'
+    $sshDir = Join-Path $env:ProgramData 'ssh'
+    $configPath = Join-Path $sshDir 'sshd_config'
+    $ruleName = 'Bicdop-Cluster-Agent-In-TCP'
+    $standardRule = 'OpenSSH-Server-In-TCP'
+    $user = 'bicdopagent'
+    foreach ($path in @($env:ProgramData,$sshDir)) {
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Agent setup cannot use a redirected directory: $path"
+        }
+    }
+
+    $service = Get-Service -Name sshd -ErrorAction SilentlyContinue
+    if ($env:ProgramData -match '[%"\p{Cc}]' -or (Test-Path -LiteralPath $root) -or
+        (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) -or
+        (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
+        throw 'A managed Agent installation, account or firewall rule already exists. Use agent setup --info or review the setup guide.'
+    }
+    if ((Test-Path -LiteralPath $configPath) -or ($service -and $service.Status -ne 'Stopped') -or
+        (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -ErrorAction SilentlyContinue)) {
+        throw 'This PC already has an OpenSSH configuration. Use the manual Cluster guide to preserve it.'
+    }
+
+    $previousRule = Get-NetFirewallRule -Name $standardRule -ErrorAction SilentlyContinue
+    $previousStart = if ($service) { [string]$service.StartType } else { 'Manual' }
+    $createdUser = $false
+    $createdRoot = $false
+    $createdConfig = $false
+    $createdRule = $false
+    $serviceTouched = $false
+    try {
+        $capability = 'OpenSSH.Server~~~~0.0.1.0'
+        if ((Get-WindowsCapability -Online -Name $capability).State -ne 'Installed') {
+            Write-Host 'Installing Windows OpenSSH Server...'
+            $feature = Add-WindowsCapability -Online -Name $capability
+            if ($feature.RestartNeeded -or (Get-WindowsCapability -Online -Name $capability).State -ne 'Installed') {
+                throw 'OpenSSH Server still needs installation or a Windows restart. Check Optional Features, then retry.'
+            }
+        }
+        $serviceTouched = $true
+        if ((Get-Service sshd).Status -ne 'Stopped') { Stop-Service -Name sshd }
+        if (Get-NetFirewallRule -Name $standardRule -ErrorAction SilentlyContinue) { Disable-NetFirewallRule -Name $standardRule }
+        $stockConfig = Join-Path $env:WINDIR 'System32/OpenSSH/sshd_config_default'
+        $restoreDefault = $false
+        if (Test-Path -LiteralPath $configPath) {
+            if (![IO.File]::Exists($stockConfig) -or
+                (Get-FileHash -LiteralPath $configPath).Hash -ne (Get-FileHash -LiteralPath $stockConfig).Hash) {
+                throw 'An OpenSSH configuration appeared during setup and was preserved.'
+            }
+            $restoreDefault = $true
+        }
+
+        Write-Host 'Creating a dedicated non-administrator Agent account...'
+        $random = [byte[]]::new(48)
+        $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $rng.GetBytes($random) } finally { $rng.Dispose() }
+        $password = ConvertTo-SecureString ('Aa1!' + [Convert]::ToBase64String($random)) -AsPlainText -Force
+        [Array]::Clear($random,0,$random.Length)
+        $account = New-LocalUser -Name $user -Password $password -PasswordNeverExpires -UserMayNotChangePassword -Description 'Bicdop restricted Cluster Agent'
+        $createdUser = $true
+        $sid = $account.SID.Value
+
+        $null = New-Item -ItemType Directory -Path $root -ErrorAction Stop
+        $createdRoot = $true
+        [IO.Directory]::SetAccessControl($root,(New-BicdopClusterAcl $sid -Public))
+        $workspace = Join-Path $root 'Workspace'
+        $state = Join-Path $root 'State'
+        foreach ($directory in $workspace,$state) {
+            [void][IO.Directory]::CreateDirectory($directory,(New-BicdopClusterAcl $sid -Write))
+        }
+        $moduleDir = Join-Path $root 'Module'
+        [void][IO.Directory]::CreateDirectory($moduleDir)
+        foreach ($file in $script:BicdopModuleFiles) {
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $moduleDir $file)
+        }
+        Save-BicdopJson (Join-Path $state 'fleet.json') @{
+            schema=1; devices=@{}; agent=@{ id=[guid]::NewGuid().ToString(); enabled=$true; root=$workspace; allowUpdates=$false }
+        }
+
+        $authorized = Join-Path $root 'authorized_keys'
+        $entry = 'from="{0}",restrict {1}' -f $controller,$key
+        [IO.File]::WriteAllLines($authorized,@($entry),[Text.Encoding]::ASCII)
+        [IO.File]::SetAccessControl($authorized,(New-BicdopClusterAcl $sid -File))
+        $runner = @'
+$ErrorActionPreference = 'Stop'
+$module = Import-Module (Join-Path $PSScriptRoot 'Module/Bicdop.psd1') -PassThru -ErrorAction Stop
+& $module { param($State); $script:RegistryPath = Join-Path $State 'registry.json' } (Join-Path $PSScriptRoot 'State')
+bicdop agent serve
+'@
+        [IO.File]::WriteAllText((Join-Path $root 'Run-Agent.ps1'),$runner,[Text.Encoding]::ASCII)
+
+        if (!(Test-Path -LiteralPath $sshDir)) { $null = New-Item -ItemType Directory -Path $sshDir -ErrorAction Stop }
+        if ((Get-Item -LiteralPath $sshDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'The OpenSSH data directory cannot be a link.'
+        }
+        $sshd = Join-Path $env:WINDIR 'System32/OpenSSH/sshd.exe'
+        $keygen = Join-Path $env:WINDIR 'System32/OpenSSH/ssh-keygen.exe'
+        & $keygen -A
+        if ($LASTEXITCODE) { throw 'OpenSSH host key generation failed.' }
+        $hostKey = Join-Path $sshDir 'ssh_host_ed25519_key'
+        if (![IO.File]::Exists($hostKey) -or ![IO.File]::Exists("$hostKey.pub")) { throw 'The OpenSSH Ed25519 host key is missing.' }
+
+        $candidate = Join-Path $root 'sshd_config'
+        [IO.File]::WriteAllLines($candidate,(New-BicdopClusterSshConfig $root $hostKey (Join-Path $PSHOME 'powershell.exe')),[Text.Encoding]::ASCII)
+        Write-Host 'Validating restricted OpenSSH configuration...'
+        & $sshd -t -f $candidate
+        if ($LASTEXITCODE) { throw 'OpenSSH refused the generated configuration.' }
+        [IO.File]::Copy($candidate,$configPath,$restoreDefault)
+        $createdConfig = $true
+        $publicHostKey = Join-Path $root 'agent-host.pub'
+        Copy-Item -LiteralPath "$hostKey.pub" -Destination $publicHostKey
+        $fingerprint = & $keygen -lf $publicHostKey
+        if ($LASTEXITCODE -or !$fingerprint) { throw 'Could not read the public host fingerprint.' }
+        $null = New-NetFirewallRule -Name $ruleName -DisplayName 'Bicdop Cluster Agent (controller only)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress $controller -Profile Private,Domain
+        $createdRule = $true
+        Set-Service -Name sshd -StartupType Automatic
+        Start-Service -Name sshd
+        Save-BicdopJson (Join-Path $root 'enrollment.json') @{
+            user=$user; controller=$controller; port=22; fingerprint=[string]$fingerprint; publicKey=$publicHostKey
+            priorFirewallEnabled=[bool]($previousRule -and $previousRule.Enabled -eq 'True'); priorStartup=$previousStart
+            configHash=(Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
+        }
+        Write-Host 'Bicdop Cluster Agent is ready for Controller approval.'
+    } catch {
+        if ($serviceTouched) {
+            Stop-Service -Name sshd -ErrorAction SilentlyContinue
+            Set-Service -Name sshd -StartupType $previousStart -ErrorAction SilentlyContinue
+            if ($previousRule -and $previousRule.Enabled -eq 'True') {
+                Enable-NetFirewallRule -Name $standardRule -ErrorAction SilentlyContinue
+            }
+        }
+        if ($createdRule) { Remove-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue }
+        if ($createdConfig) {
+            if ($restoreDefault) { [IO.File]::Copy($stockConfig,$configPath,$true) }
+            else { [IO.File]::Delete($configPath) }
+        }
+        if ($createdUser) { Remove-LocalUser -Name $user -ErrorAction SilentlyContinue }
+        if ($createdRoot) { Write-Warning "Setup stopped. Its protected files were retained at '$root' for recovery." }
+        throw
+    }
+}
+
+function Show-BicdopManagedAgentInfo {
+    $root = Join-Path $env:ProgramData 'BicdopClusterAgent'
+    $path = Join-Path $root 'enrollment.json'
+    if (![IO.File]::Exists($path)) { throw 'No managed Cluster Agent enrollment details found.' }
+    $info = Read-BicdopJson $path
+    [pscustomobject][ordered]@{
+        User = $info.user
+        Addresses = @(Get-BicdopClusterIPv4) -join ', '
+        Port = $info.port
+        Controller = $info.controller
+        Fingerprint = $info.fingerprint
+        PublicHostKey = $info.publicKey
+        Workspace = Join-Path $root 'Workspace'
+        Service = [string](Get-Service -Name sshd -ErrorAction SilentlyContinue).Status
+    }
+}
+
+function Invoke-BicdopAgentSetup([object[]]$Options) {
+    if (!$script:RunningOnWindows) { throw 'Agent setup is available on Windows only.' }
+    if ($Options.Count -eq 2 -and $Options[1] -eq '--info') { Show-BicdopManagedAgentInfo; return }
+    if ($Options.Count -eq 1) {
+        $Options = @('setup', (Read-Host 'Controller IPv4 address'), (Read-Host 'Path to the Controller public key (.pub)'))
+    }
+    if ($Options.Count -ne 3) { throw 'Usage: agent setup CONTROLLER-IP CONTROLLER-KEY.pub | agent setup --info' }
+    $controller = ConvertTo-BicdopClusterIPv4 $Options[1]
+    $file = Get-Item -LiteralPath ([string]$Options[2].Trim('"')) -ErrorAction Stop
+    if ($file -isnot [IO.FileInfo] -or $file.Length -gt 2048) { throw 'Choose the Controller public key file.' }
+    $key = ConvertTo-BicdopClusterPublicKey ([IO.File]::ReadAllText($file.FullName))
+    Write-Host "Setup will enable OpenSSH for Controller $controller and create a dedicated Windows Agent account."
+    if (!(Confirm-Bicdop 'Continue with Windows administrator approval?')) {
+        Write-BicdopResult 'Agent setup cancelled.'
+        return
+    }
+    Invoke-BicdopAgentSetupApproval @{ Controller = $controller; PublicKey = $key }
+    Show-BicdopManagedAgentInfo
+}
+
+function Invoke-BicdopAgentSetupApproval($Settings) {
+    $Settings.Manifest = Join-Path $PSScriptRoot 'Bicdop.psd1'
+    $payload = ConvertTo-Json -InputObject $Settings -Compress
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+    $scriptBody = @'
+$ErrorActionPreference = 'Stop'
+try {
+    $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SETUP_REQUEST__')) | ConvertFrom-Json
+    $module = Import-Module -Name $request.Manifest -Force -PassThru -ErrorAction Stop
+    & $module { param($Settings) Invoke-BicdopManagedAgentSetup $Settings } $request
+    exit 0
+} catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Read-Host 'Press Enter to close'
+    exit 1
+}
+'@
+    $command = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptBody.Replace('__SETUP_REQUEST__',$encoded)))
+    $powerShell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    $process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',$command)
+    if ($process.ExitCode -ne 0) { throw 'The managed Agent action did not complete. Review the administrator window.' }
+}
+
+function New-BicdopControllerKey {
+    $keygen = (Get-Command ssh-keygen.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $directory = Get-BicdopClusterFile 'ClusterKeys'
+    $privateKey = Join-Path $directory 'controller_ed25519'
+    $publicKey = "$privateKey.pub"
+    if (![IO.File]::Exists($privateKey) -and ![IO.File]::Exists($publicKey)) {
+        if (!(Confirm-Bicdop 'Create a dedicated Controller key protected by your Windows account?')) { return }
+        [void][IO.Directory]::CreateDirectory($directory)
+        $parameters = '-q -t ed25519 -N "" -f "{0}"' -f $privateKey
+        $process = Start-Process -FilePath $keygen -ArgumentList $parameters -NoNewWindow -Wait -PassThru
+        if ($process.ExitCode) { throw 'Could not create the Controller key.' }
+
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $icacls = Join-Path $env:WINDIR 'System32/icacls.exe'
+        try {
+            & $icacls $privateKey '/inheritance:r' '/grant:r' "*${sid}:F" | Out-Null
+            if ($LASTEXITCODE) { throw 'Could not restrict the Controller private key permissions.' }
+        } catch {
+            [IO.File]::Delete($privateKey)
+            [IO.File]::Delete($publicKey)
+            throw
+        }
+    }
+    if (![IO.File]::Exists($privateKey) -or ![IO.File]::Exists($publicKey)) {
+        throw 'The Controller key pair is incomplete. Review the ClusterKeys folder before retrying.'
+    }
+    [pscustomobject][ordered]@{ Addresses = @(Get-BicdopClusterIPv4) -join ', '; PublicKey = $publicKey; IdentityFile = $privateKey }
+}
+
+function Invoke-BicdopAgent([object[]]$Options) {
+    $managed = $script:RunningOnWindows -and [IO.File]::Exists((Join-Path $env:ProgramData 'BicdopClusterAgent/enrollment.json'))
+    switch ($Options[0]) {
+        'setup' { Invoke-BicdopAgentSetup $Options }
+        'status' {
+            if ($managed) { Show-BicdopManagedAgentInfo }
+            else { Get-BicdopAgentStatus (Read-BicdopCluster).agent }
+        }
+        'serve' { Start-BicdopAgentRequest }
+        'enable' {
+            if ($Options.Count -notin 2,3 -or ($Options.Count -eq 3 -and $Options[2] -ne '--allow-updates')) {
+                throw 'Usage: agent enable APPROVED-ROOT [--allow-updates]'
+            }
+            $root = (Get-BicdopFolder $Options[1]).FullName
+            $null = Resolve-BicdopBlueprintResourcePath $root '.bicdop-path-check'
+            $profileRoot = [Environment]::GetFolderPath('UserProfile')
+            $systemRoots = @($env:WINDIR, [Environment]::GetFolderPath('LocalApplicationData'), [Environment]::GetFolderPath('ApplicationData'), [Environment]::GetFolderPath('ProgramFiles'), [Environment]::GetFolderPath('ProgramFilesX86'))
+            if (($profileRoot -and (Test-BicdopUnder $profileRoot $root)) -or
+                ($systemRoots | Where-Object { $_ -and ((Test-BicdopUnder $root $_) -or (Test-BicdopUnder $_ $root)) } | Select-Object -First 1)) {
+                throw 'Choose a dedicated development folder outside system folders and profile or application-data roots.'
+            }
+            if ($script:RunningOnWindows) {
+                $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+                if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+                    throw 'Enable the Agent as a standard, non-elevated Windows user.'
+                }
+            }
+            if (!(Confirm-Bicdop "Enable this Agent with Blueprint root '$root'?")) { return }
+            Update-BicdopCluster {
+                param($state)
+                if (!$state.agent.id) { $state.agent.id = [guid]::NewGuid().ToString() }
+                $state.agent.root = $root
+                $state.agent.allowUpdates = $Options.Count -eq 3
+                $state.agent.enabled = $true
+            }
+            Write-BicdopClusterAudit 'agent-enable' ([Environment]::MachineName) 'Completed' ''
+            Get-BicdopAgentStatus (Read-BicdopCluster).agent
+        }
+        'revoke' {
+            if ($managed) {
+                if (Confirm-Bicdop 'Disable the managed Cluster Agent, its SSH service, and its firewall rule?') {
+                    Invoke-BicdopAgentSetupApproval @{ Action = 'Revoke' }
+                }
+                return
+            }
+            if (!(Confirm-Bicdop 'Disable this Agent and rotate its device identity?')) { return }
+            Update-BicdopCluster {
+                param($state)
+                $state.agent.enabled = $false
+                $state.agent.id = [guid]::NewGuid().ToString()
+            }
+            Write-BicdopClusterAudit 'agent-revoke' ([Environment]::MachineName) 'Completed' ''
+        }
+        'update' {
+            if ($managed) { throw 'The managed Agent module is protected in ProgramData. This command updates only per-account Agents.' }
+            if (!(Confirm-Bicdop 'Install a verified Agent module update for the current account?')) { return }
+            $current = $ExecutionContext.SessionState.Module.Version
+            $result = Install-BicdopRelease $current (Get-BicdopManagedRoot)
+            Write-BicdopClusterAudit 'agent-update' ([Environment]::MachineName) 'Completed' ''
+            $result
+        }
+        default { throw 'Usage: agent setup | enable ROOT | status | revoke | update' }
+    }
+}
+
+function Invoke-BicdopBlueprint([object[]]$Options) {
+    $action = [string]$Options[0]
+    if ($action -eq 'list' -and $Options.Count -eq 1) {
+        $directory = Get-BicdopClusterFile 'Blueprints'
+        if ([IO.Directory]::Exists($directory)) {
+            Get-ChildItem -LiteralPath $directory -File -Filter '*.blueprint.yaml' | Sort-Object Name | Select-Object Name, FullName
+        }
+        return
+    }
+    if ($Options.Count -notin 2,4 -or
+        ($Options.Count -eq 4 -and ($Options[2] -notin '--cluster','--node' -or $action -notin 'plan','apply','drift'))) {
+        throw 'Usage: blueprint create|inspect|validate|plan|apply|drift|history NAME [--node NODE | --cluster TARGET]'
+    }
+    $name = [string]$Options[1]
+    $path = Get-BicdopBlueprintPath $name
+    if ($action -eq 'create') {
+        [void][IO.Directory]::CreateDirectory((Split-Path -LiteralPath $path))
+        $template = [ordered]@{
+            apiVersion='bicdop.io/v1'; kind='Blueprint'; metadata=[ordered]@{name=$name}
+            spec=[ordered]@{resources=@([ordered]@{id='workspace-folder';type='directory';path='Development'})}
+        }
+        $file = [IO.File]::Open($path,'CreateNew','Write','None')
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $template -Depth 10))
+            $file.Write($bytes,0,$bytes.Length)
+        } finally { $file.Dispose() }
+        Write-Host "Created $path"
+        return
+    }
+    if ($action -eq 'history') {
+        $audit = Get-BicdopClusterFile 'cluster-audit.jsonl'
+        if ([IO.File]::Exists($audit)) {
+            Get-Content -LiteralPath $audit -Tail 1000 | ForEach-Object { ConvertFrom-Json $_ } | Where-Object action -eq "blueprint-apply:$name"
+        }
+        return
+    }
+    $file = Get-Item -LiteralPath $path -ErrorAction Stop
+    if ($file -isnot [IO.FileInfo] -or $file.Length -gt 65536) { throw 'Blueprint must be a file of at most 64 KiB.' }
+    $document = Read-BicdopJson $path
+    $resources = @(Get-BicdopBlueprintResources $document)
+    if ($document.metadata.name -cne $name) { throw 'Blueprint metadata must match its filename.' }
+    switch ($action) {
+        'inspect' { Get-Content -LiteralPath $path -Raw -Encoding UTF8 }
+        'validate' { [pscustomobject]@{ Blueprint = $name; Resources = $resources.Count; Status = 'Valid' } }
+        { $_ -in 'plan','apply','drift' } {
+            if ($Options.Count -eq 4) {
+                $operation = if ($action -eq 'apply') { 'apply' } else { 'plan' }
+                if ($operation -eq 'apply' -and !(Confirm-Bicdop "Apply '$name' to approved Cluster target '$($Options[3])'?")) { return }
+                $selector = if ($Options[2] -eq '--node') { 'node:' + (Get-BicdopAutomationId $Options[3]) }
+                            elseif ($Options[3] -eq 'all' -or $Options[3] -like 'group:*') { $Options[3] }
+                            else { 'group:' + (Get-BicdopAutomationId $Options[3]) }
+                Invoke-BicdopClusterBatch $selector $operation $document
+                return
+            }
+            $root = (Get-BicdopFolder).FullName
+            if ($action -eq 'apply') {
+                if (!(Confirm-Bicdop "Apply '$name' under '$root'?")) { return }
+                $results = @(Invoke-BicdopBlueprintEngine $document $root -Apply)
+                $overall = if (@($results | Where-Object Status -in 'Failed','Skipped','Unsupported').Count) { 'Incomplete' } else { 'Completed' }
+                Write-BicdopClusterAudit "blueprint-apply:$name" ([Environment]::MachineName) $overall ([guid]::NewGuid().ToString('N'))
+                $results
+            } else { Invoke-BicdopBlueprintEngine $document $root }
+        }
+        default { throw 'Unknown Blueprint command.' }
+    }
+}
+
+function Invoke-BicdopRemote([object[]]$Options) {
+    if ($Options[0] -ne 'exec') { throw 'Usage: remote exec TARGET -- "git status"' }
+    if ($Options.Count -eq 4 -and $Options[2] -eq '--') { $selector = $Options[1]; $command = $Options[3] }
+    elseif ($Options.Count -eq 5 -and $Options[1] -eq '--cluster' -and $Options[3] -eq '--') { $selector = $Options[2]; $command = $Options[4] }
+    else { throw 'Usage: remote exec TARGET -- "git status" | remote exec --cluster all -- "git --version"' }
+    if ($command -cnotin 'git status','git --version','python --version') { throw 'Use a registered read-only command: git status, git --version, or python --version.' }
+    if (!(Confirm-Bicdop "Run '$command' on approved Cluster target '$selector'?")) { return }
+    Invoke-BicdopClusterBatch $selector 'exec' -Command $command
+}
+
+function Get-BicdopAutomationId([string]$Name) {
+    if ($Name -cnotmatch '^[a-z][a-z0-9-]{0,62}$') { throw 'Use an Automation ID such as email-archiver.' }
+    return $Name
+}
+
+function Get-BicdopAutomationDirectory([string]$Name) {
+    Join-Path (Get-BicdopClusterFile 'Automation') (Get-BicdopAutomationId $Name)
+}
+
+function Read-BicdopAutomation([string]$Name) {
+    $path = Join-Path (Get-BicdopAutomationDirectory $Name) 'job.json'
+    if (![IO.File]::Exists($path)) { throw "Automation '$Name' is not registered on this Node." }
+    $job = Read-BicdopJson $path
+    if ($job.schema -ne 1 -or $job.id -cne $Name) { throw 'Invalid local Automation registration.' }
+    $job
+}
+
+function Get-BicdopAutomationSchedule([string]$Time, [string]$Zone, [string]$Day = '') {
+    if ($Time -cnotmatch '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' -or !$Zone) { throw 'Use HH:mm and an explicit time zone.' }
+    if ($Day -and $Day -cnotin ([Enum]::GetNames([DayOfWeek]))) { throw 'Use an English weekday such as Monday.' }
+    $zoneId = if ($Zone -ceq 'Asia/Jakarta') { 'SE Asia Standard Time' } else { $Zone }
+    $null = [TimeZoneInfo]::FindSystemTimeZoneById($zoneId)
+    @{ time = $Time; timezone = $Zone; zoneId = $zoneId; day = $Day }
+}
+
+function Update-BicdopAutomation([string]$Name, [scriptblock]$Change) {
+    $directory = Get-BicdopAutomationDirectory $Name
+    $file = Join-Path $directory 'job.json'
+    $lock = [IO.File]::Open((Join-Path $directory 'definition.lock'),'OpenOrCreate','ReadWrite','None')
+    try {
+        $job = Read-BicdopAutomation $Name
+        if (& $Change $job) { Save-BicdopJson $file $job }
+        $job
+    } finally { $lock.Dispose() }
+}
+
+function Register-BicdopAutomation([string]$Name, [string]$Path, [bool]$Remote) {
+    $directory = Get-BicdopAutomationDirectory $Name
+    $root = (Get-BicdopFolder $Path).FullName
+    $manifestPath = Resolve-BicdopBlueprintResourcePath $root 'bicdop-job.json'
+    if (![IO.File]::Exists($manifestPath) -or ([IO.FileInfo]::new($manifestPath)).Length -gt 65536) { throw 'Expected a bicdop-job.json manifest of at most 64 KiB.' }
+    $manifest = Read-BicdopJson $manifestPath
+    Assert-BicdopBlueprintFields $manifest @('schema','id','version','runtime','entry','arguments','timeoutSeconds','description')
+    if ($manifest.schema -ne 1 -or $manifest.id -cne $Name -or $manifest.version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Manifest schema, id or version is invalid.' }
+    if ($manifest.entry -isnot [string] -or $manifest.entry -notmatch '^[\w.-]+(?:[\\/][\w.-]+)*$') { throw 'Manifest entry must be a relative file path.' }
+    $entry = Resolve-BicdopBlueprintResourcePath $root $manifest.entry
+    $extension = @{ python='.py'; powershell='.ps1'; executable='.exe' }[[string]$manifest.runtime]
+    if (!$extension -or [IO.Path]::GetExtension($entry) -ine $extension -or ![IO.File]::Exists($entry)) { throw 'Entry file and the Python, PowerShell or executable runtime must match.' }
+    $arguments = @()
+    if ($manifest.ContainsKey('arguments')) {
+        if ($manifest.arguments -isnot [array] -or $manifest.arguments.Count -gt 32) { throw 'arguments must be an array of at most 32 strings.' }
+        foreach ($argument in $manifest.arguments) {
+            if ($argument -isnot [string] -or $argument.Length -gt 256 -or $argument -match '["\p{Cc}]') { throw 'Invalid job argument.' }
+            $arguments += $argument
+        }
+    }
+    $timeout = 600
+    if ($manifest.ContainsKey('timeoutSeconds') -and
+        (![int]::TryParse([string]$manifest.timeoutSeconds,[ref]$timeout) -or $timeout -lt 1 -or $timeout -gt 86400)) { throw 'timeoutSeconds must be from 1 to 86400.' }
+    if ($Remote) {
+        $agent = (Read-BicdopCluster).agent
+        if (!$agent.enabled -or (Test-BicdopUnder $root $agent.root) -or (Test-BicdopUnder $agent.root $root)) {
+            throw 'Remote-approved jobs require an enabled Agent and an installation separate from its Blueprint workspace.'
+        }
+    }
+    if (Test-Path -LiteralPath $directory) { throw 'Automation already exists. Remove its registration before registering another version.' }
+    $null = New-Item -ItemType Directory -Path $directory -ErrorAction Stop
+    $job = @{ schema=1; id=$Name; root=$root; version=$manifest.version; runtime=$manifest.runtime; entry=$manifest.entry
+        arguments=$arguments; timeout=$timeout; sha256=(Get-FileHash -LiteralPath $entry -Algorithm SHA256).Hash; remote=$Remote
+        enabled=$false; schedule=$null; lastSlot=''; pending=$null }
+    Save-BicdopJson (Join-Path $directory 'job.json') $job
+    [pscustomobject]$job
+}
+
+function Get-BicdopAutomationRuns([string]$Name) {
+    $directory = Get-BicdopAutomationDirectory $Name
+    if (![IO.Directory]::Exists($directory)) { return }
+    Get-ChildItem -LiteralPath $directory -Filter 'run-*.json' -File |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 20 |
+        ForEach-Object { [pscustomobject](Read-BicdopJson $_.FullName) }
+}
+
+function Request-BicdopAutomationRun([string]$Name, [string]$Id) {
+    $directory = Get-BicdopAutomationDirectory $Name
+    $updated = Update-BicdopAutomation $Name {
+        param($job)
+        if (!$job.enabled) { throw 'Enable the job before running it.' }
+        if ($job.pending -eq $Id -or [IO.File]::Exists((Join-Path $directory "run-$Id.json"))) { return $false }
+        if ($job.pending) { throw 'A run is already queued.' }
+        $job.pending = $Id
+        return $true
+    }
+    [pscustomobject]@{ Job=$Name; RunId=$Id; Status=if ($updated.pending -eq $Id) { 'Queued' } else { 'AlreadyRecorded' } }
+}
+
+function Invoke-BicdopAutomationWorker([string]$Name, [datetime]$UtcNow = [datetime]::UtcNow) {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if ($identity.IsSystem -or $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Start the Automation worker as a non-elevated Windows user.'
+    }
+    $directory = Get-BicdopAutomationDirectory $Name
+    try { $lock=[IO.File]::Open((Join-Path $directory 'worker.lock'),'OpenOrCreate','ReadWrite','None') }
+    catch [IO.IOException] { return }
+    try {
+        foreach ($orphan in @(Get-BicdopAutomationRuns $Name | Where-Object Status -eq 'Running')) {
+            $record = Convert-BicdopJsonValue $orphan
+            $record.Status = 'Unknown'
+            $record.EndedUtc = $UtcNow.ToString('o')
+            Save-BicdopJson (Join-Path $directory "run-$($record.RunId).json") $record
+        }
+            $job = Update-BicdopAutomation $Name {
+            param($current)
+            if (!$current.enabled) { return $false }
+            $id = $current.pending
+            if (!$id -and $current.schedule) {
+                $schedule = $current.schedule
+                $local = [TimeZoneInfo]::ConvertTimeFromUtc($UtcNow,[TimeZoneInfo]::FindSystemTimeZoneById($schedule.zoneId))
+                $slot = $local.ToString('yyyy-MM-dd HH:mm')
+                if ($local.ToString('HH:mm') -ne $schedule.time -or ($schedule.day -and "$($local.DayOfWeek)" -ne $schedule.day) -or $slot -eq $current.lastSlot) { return $false }
+                $id = [guid]::NewGuid().ToString('N')
+                $current.lastSlot = $slot
+            }
+            if (!$id) { return $false }
+            $current.pending = $null
+            if ([IO.File]::Exists((Join-Path $directory "run-$id.json"))) { return $true }
+            # Persist the claim before starting the process; restart never replays a claimed ID.
+            $claim = @{ Job=$Name; RunId=$id; Node=[Environment]::MachineName; Version=$current.version; Status='Running'; StartedUtc=[datetime]::UtcNow.ToString('o') }
+            Save-BicdopJson (Join-Path $directory "run-$id.json") $claim
+            return $true
+        }
+        $claimed = Get-BicdopAutomationRuns $Name | Where-Object Status -eq 'Running' | Select-Object -First 1
+        if (!$claimed) { return }
+        $record = Convert-BicdopJsonValue $claimed
+        $id = $record.RunId
+        $stdout = Join-Path $directory "$id.stdout"
+        $stderr = Join-Path $directory "$id.stderr"
+        $cancel = Join-Path $directory "$id.cancel"
+        $process = $null
+        try {
+            $entry = Resolve-BicdopBlueprintResourcePath $job.root $job.entry
+            if ((Get-FileHash -LiteralPath $entry -Algorithm SHA256 -ErrorAction Stop).Hash -ne $job.sha256) { throw 'The registered entry changed. Review and register the new version locally.' }
+            $parts = @($job.arguments)
+            switch ($job.runtime) {
+                'python' { $tool = Get-BicdopPython $job.root; $parts = @('-E','-s',$entry) + $parts }
+                'powershell' {
+                    $tool = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+                    $parts = @('-NoLogo','-NoProfile','-NonInteractive','-File',$entry) + $parts
+                }
+                'executable' { $tool = $entry }
+                default { throw 'Unsupported registered runtime.' }
+            }
+            $params = @{ FilePath=$tool; WorkingDirectory=$job.root; WindowStyle='Hidden'; RedirectStandardOutput=$stdout; RedirectStandardError=$stderr; PassThru=$true; ErrorAction='Stop' }
+            if ($parts.Count) {
+                $params.ArgumentList = ($parts | ForEach-Object { '"' + ($_ -replace '(\\+)$','$1$1') + '"' }) -join ' '
+            }
+            $process = Start-Process @params
+            $null = $process.Handle
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            while (!$process.WaitForExit(250)) {
+                if ([IO.File]::Exists($cancel)) { $record.Status='Cancelled'; break }
+                if ($watch.Elapsed.TotalSeconds -ge $job.timeout) { $record.Status='TimedOut'; break }
+                $oversize = @($stdout,$stderr | Where-Object { [IO.File]::Exists($_) -and ([IO.FileInfo]::new($_)).Length -gt 1MB })
+                if ($oversize.Count) { $record.Status='Failed'; $record.Error='Output exceeded 1 MiB per stream.'; break }
+            }
+            if (!$process.HasExited) {
+                & (Join-Path $env:WINDIR 'System32/taskkill.exe') /PID $process.Id /T /F | Out-Null
+                if (!$process.WaitForExit(5000)) { throw 'The job process did not stop.' }
+            }
+            $record.ExitCode = $process.ExitCode
+            if ($record.Status -eq 'Running') { $record.Status = if ($process.ExitCode -eq 0) { 'Succeeded' } else { 'Failed' } }
+        } catch { $record.Status='Failed'; $record.Error=$_.Exception.Message }
+        finally {
+            if ($process) { $process.Dispose() }
+            [IO.File]::Delete($cancel)
+            $record.EndedUtc = [datetime]::UtcNow.ToString('o')
+            foreach ($stream in @(@('Stdout',$stdout),@('Stderr',$stderr))) {
+                if ([IO.File]::Exists($stream[1])) {
+                    $reader = [IO.StreamReader]::new($stream[1])
+                    try {
+                        $characters = [char[]]::new(12288)
+                        $size = $reader.ReadBlock($characters,0,$characters.Length)
+                        $sample = [string]::new($characters,0,$size)
+                        $record[$stream[0]] = $sample -replace '(?im)((?:password|token|secret|api[_-]?key)\s*[:=]\s*)[^\r\n]+','$1[redacted]'
+                        if (!$reader.EndOfStream) { $record.Truncated = $true }
+                    } finally { $reader.Dispose(); [IO.File]::Delete($stream[1]) }
+                }
+            }
+            $report = @($record.Stdout -split '\r?\n' | Where-Object { $_ -clike 'BICDOP_RESULT *' } | Select-Object -Last 1)
+            if ($report.Count) {
+                try {
+                    $data = Convert-BicdopJsonValue (ConvertFrom-Json -InputObject $report[0].Substring(14) -ErrorAction Stop)
+                    Assert-BicdopBlueprintFields $data @('schema','metrics')
+                    if ($data.schema -ne 1 -or $data.metrics -isnot [Collections.IDictionary] -or $data.metrics.Count -gt 30) {
+                        throw 'Invalid metrics schema.'
+                    }
+                    foreach ($metric in $data.metrics.Keys) {
+                        if ($metric -cnotmatch '^[a-z][a-z0-9_]{0,62}$' -or $data.metrics[$metric] -isnot [ValueType] -or
+                            $data.metrics[$metric] -is [bool] -or [double]::IsInfinity([double]$data.metrics[$metric]) -or
+                            [double]::IsNaN([double]$data.metrics[$metric])) { throw 'Only finite numeric metrics are accepted.' }
+                    }
+                    $record.Metrics = $data.metrics
+                } catch { $record.ReportError = 'Invalid BICDOP_RESULT report.' }
+            }
+            Save-BicdopJson (Join-Path $directory "run-$id.json") $record
+            Get-ChildItem -LiteralPath $directory -Filter 'run-*.json' -File |
+                Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20 |
+                ForEach-Object { [IO.File]::Delete($_.FullName) }
+        }
+        [pscustomobject]$record
+    } finally { $lock.Dispose() }
+}
+
+
+function Invoke-BicdopAutomationPolicy($Resource, [bool]$Apply) {
+    $name = Get-BicdopAutomationId $Resource.name
+    $desired = $Resource.value
+    Assert-BicdopBlueprintFields $desired @('enabled','time','timezone','day')
+    if ($desired.enabled -isnot [bool]) { throw 'Automation policy requires an enabled boolean.' }
+    $schedule = Get-BicdopAutomationSchedule $desired.time $desired.timezone $desired.day
+    $test = {
+        param($job)
+        $job.enabled -ne $desired.enabled -or $job.schedule.time -cne $schedule.time -or
+        $job.schedule.timezone -cne $schedule.timezone -or [string]$job.schedule.day -cne [string]$schedule.day
+    }
+    if (!$Apply) {
+        if (& $test (Read-BicdopAutomation $name)) { return 'Changes required' }
+        return 'Compliant'
+    }
+    $changed = @{ value=$false }
+    $null = Update-BicdopAutomation $name {
+        param($job)
+        if (!(& $test $job)) { return $false }
+        $job.enabled = $desired.enabled
+        $job.schedule = $schedule
+        $changed.value = $true
+        return $true
+    }
+    if ($changed.value) { return 'Changed' }
+    return 'Compliant'
+}
+
+function Assert-BicdopRemoteAutomation([string]$Name, $Agent) {
+    $job = Read-BicdopAutomation $Name
+    if (!$job.remote -or !$Agent.root -or (Test-BicdopUnder $job.root $Agent.root) -or
+        (Test-BicdopUnder $Agent.root $job.root)) {
+        throw 'This job is not authorized for remote management.'
+    }
+    $job
+}
+
+function Invoke-BicdopAutomationAction([string]$Action, [string]$Name, [string]$Id, [string]$Time, [string]$Zone, [string]$Day, $Agent, [string]$RunId) {
+    if ($Action -eq 'list') {
+        $root = Get-BicdopClusterFile 'Automation'
+        if (![IO.Directory]::Exists($root)) { return }
+        foreach ($item in (Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name)) {
+            if (![IO.File]::Exists((Join-Path $item.FullName 'job.json'))) { continue }
+            try {
+                $job = if ($Agent) { Assert-BicdopRemoteAutomation $item.Name $Agent } else { Read-BicdopAutomation $item.Name }
+                [pscustomobject]@{ Job=$job.id; Version=$job.version; Enabled=$job.enabled; Schedule=$job.schedule; Pending=$job.pending }
+            } catch { if (!$Agent) { throw } }
+        }
+        return
+    }
+    $job = if ($Agent) { Assert-BicdopRemoteAutomation $Name $Agent } else { Read-BicdopAutomation $Name }
+    switch -Exact ($Action) {
+        'inspect' {
+            if ($Agent) {
+                [pscustomobject]@{ Job=$job.id; Version=$job.version; Runtime=$job.runtime; Enabled=$job.enabled; Schedule=$job.schedule }
+            } else { [pscustomobject]$job }
+        }
+        'status' {
+            [pscustomobject]@{ Job=$Name; Enabled=$job.enabled; Schedule=$job.schedule; Pending=$job.pending
+                LastRun=(Get-BicdopAutomationRuns $Name | Select-Object -First 1 -Property Job,RunId,Status,StartedUtc,EndedUtc,ExitCode) }
+        }
+        'logs' { Get-BicdopAutomationRuns $Name | Select-Object -First 1 }
+        'history' { Get-BicdopAutomationRuns $Name | Select-Object Job,RunId,Status,StartedUtc,EndedUtc,ExitCode,Version }
+        'failures' { Get-BicdopAutomationRuns $Name | Where-Object Status -in 'Failed','TimedOut','Unknown' | Select-Object Job,RunId,Status,StartedUtc,EndedUtc,ExitCode }
+        'run' { Request-BicdopAutomationRun $Name $Id }
+        'retry' {
+            if ($RunId -cnotmatch '^[a-f0-9]{32}$') { throw 'Give a valid failed run ID with --run-id.' }
+            $previous = Get-BicdopAutomationRuns $Name | Where-Object RunId -eq $RunId | Select-Object -First 1
+            if (!$previous -or $previous.Status -notin 'Failed','TimedOut','Cancelled') { throw 'Retry requires a recorded failed, timed out or cancelled run.' }
+            Request-BicdopAutomationRun $Name $Id
+        }
+        'stop' {
+            $null = Update-BicdopAutomation $Name { param($current); if (!$current.pending) { return $false }; $current.pending=$null; return $true }
+            $active = Get-BicdopAutomationRuns $Name | Where-Object Status -eq 'Running' | Select-Object -First 1
+            if ($active -and $active.RunId -cmatch '^[a-f0-9]{32}$') {
+                [IO.File]::WriteAllText((Join-Path (Get-BicdopAutomationDirectory $Name) "$($active.RunId).cancel"),'cancel')
+            }
+            [pscustomobject]@{ Job=$Name; Status='Stop requested' }
+        }
+        { $_ -cin 'enable','disable' } {
+            $null = Update-BicdopAutomation $Name {
+                param($current)
+                $current.enabled = $Action -ceq 'enable'
+                if (!$current.enabled) { $current.pending = $null }
+                return $true
+            }
+            [pscustomobject]@{ Job=$Name; Enabled=($Action -ceq 'enable') }
+        }
+        'schedule' {
+            $newSchedule = Get-BicdopAutomationSchedule $Time $Zone $Day
+            $null = Update-BicdopAutomation $Name { param($current); $current.schedule=$newSchedule; return $true }
+            [pscustomobject]@{ Job=$Name; Schedule=$newSchedule }
+        }
+        default { throw 'Unsupported Automation action.' }
+    }
+}
+
+function Approve-BicdopAutomationArtifact([string]$Hash) {
+    if ($Hash -notmatch '^[a-f0-9]{64}$') { throw 'Supply the exact reviewed ZIP SHA-256 digest.' }
+    if (!(Confirm-Bicdop "Allow deployment of this exact Automation artifact? $Hash")) { return }
+    $directory = Get-BicdopClusterFile 'ApprovedAutomationArtifacts'
+    [void][IO.Directory]::CreateDirectory($directory)
+    [IO.File]::WriteAllText((Join-Path $directory $Hash.ToLowerInvariant()),'local approval')
+    [pscustomobject]@{ Sha256=$Hash.ToLowerInvariant(); Approved=$true }
+}
+
+function Install-BicdopAutomationArtifact([string]$Hash, [string]$Payload, [bool]$Remote, $Agent) {
+    if ($Hash -notmatch '^[a-f0-9]{64}$' -or $Payload.Length -gt 48000) { throw 'Expected a ZIP of at most 36 KB and its SHA-256 digest.' }
+    $Hash = $Hash.ToLowerInvariant()
+    if ($Remote) {
+        if (!$Agent.enabled -or !$Agent.root -or
+            ![IO.File]::Exists((Join-Path (Get-BicdopClusterFile 'ApprovedAutomationArtifacts') $Hash))) {
+            throw 'Approve this exact ZIP digest locally on the Node before deployment.'
+        }
+    }
+    $bytes = [Convert]::FromBase64String($Payload)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { $actual = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-','').ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+    if ($actual -cne $Hash) { throw 'Automation artifact digest mismatch.' }
+
+    $root = Get-BicdopClusterFile 'AutomationArtifacts'
+    if ($Remote -and ((Test-BicdopUnder $root $Agent.root) -or (Test-BicdopUnder $Agent.root $root))) {
+        throw 'The artifact store must be separate from the remote Blueprint workspace.'
+    }
+    $destination = Join-Path $root $Hash
+    if ([IO.Directory]::Exists($destination)) { throw 'This artifact is already staged. Existing artifacts are preserved.' }
+    $stage = Join-Path $root ('.stage-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($stage)
+    $memory = [IO.MemoryStream]::new($bytes,$false)
+    try {
+        Add-Type -AssemblyName System.IO.Compression
+        $archive = [IO.Compression.ZipArchive]::new($memory,[IO.Compression.ZipArchiveMode]::Read)
+        try {
+            if ($archive.Entries.Count -gt 64) { throw 'Automation ZIP allows at most 64 files.' }
+            $paths = @{}
+            $total = [long]0
+            foreach ($entry in $archive.Entries) {
+                $name = $entry.FullName
+                $attributes = $entry.ExternalAttributes
+                if (($attributes -band 1024) -or ((($attributes -shr 16) -band 0xf000) -eq 0xa000) -or
+                    $name -notmatch '^[A-Za-z0-9_-][A-Za-z0-9_. -]*(?:/[A-Za-z0-9_-][A-Za-z0-9_. -]*)*/?$') {
+                    throw 'The ZIP contains a link or unsafe path.'
+                }
+                foreach ($part in $name.TrimEnd('/').Split('/')) {
+                    if ($part -match '[ .]$|^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') { throw 'The ZIP contains an unsafe Windows filename.' }
+                }
+                if ($name.EndsWith('/')) { continue }
+                if ($paths.ContainsKey($name)) { throw 'The ZIP contains duplicate paths.' }
+                $paths[$name]=$true
+                $total += $entry.Length
+                if ($total -gt 1MB) { throw 'The unpacked Automation ZIP exceeds 1 MiB.' }
+                $file = Resolve-BicdopBlueprintResourcePath $stage $name
+                [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($file))
+                $source = $entry.Open()
+                try {
+                    $target = [IO.File]::Open($file,'CreateNew','Write','None')
+                    try {
+                        $buffer = [byte[]]::new(8192)
+                        while (($count = $source.Read($buffer,0,$buffer.Length)) -gt 0) {
+                            if ($target.Length + $count -gt $entry.Length) { throw 'The ZIP entry exceeded its declared length.' }
+                            $target.Write($buffer,0,$count)
+                        }
+                        if ($target.Length -ne $entry.Length) { throw 'The ZIP entry length did not match.' }
+                    } finally { $target.Dispose() }
+                } finally { $source.Dispose() }
+            }
+        } finally { $archive.Dispose() }
+        $manifest = Read-BicdopJson (Join-Path $stage 'bicdop-job.json')
+        $name = Get-BicdopAutomationId $manifest.id
+        if (Test-Path -LiteralPath (Get-BicdopAutomationDirectory $name)) { throw 'This job is already registered. Deployment never overwrites an existing job.' }
+        [IO.Directory]::Move($stage,$destination)
+        Register-BicdopAutomation $name $destination $Remote
+    } finally {
+        $memory.Dispose()
+        if ([IO.Directory]::Exists($stage)) { [IO.Directory]::Delete($stage,$true) }
+    }
+}
+
+
+
+function Invoke-BicdopAutomation([object[]]$Options) {
+    $action = [string]$Options[0]
+    if ($action -eq 'approve-artifact') {
+        if ($Options.Count -ne 2) { throw 'Usage: automation approve-artifact SHA256' }
+        Approve-BicdopAutomationArtifact $Options[1]
+        return
+    }
+    if ($action -eq 'deploy') {
+        if ($Options.Count -notin 2,4 -or ($Options.Count -eq 4 -and $Options[2] -notin '--node','--cluster')) {
+            throw 'Usage: automation deploy PACKAGE.zip [--node NODE | --cluster GROUP]'
+        }
+        $file = Get-Item -LiteralPath ([string]$Options[1]) -ErrorAction Stop
+        if ($file -isnot [IO.FileInfo] -or $file.Extension -ine '.zip' -or $file.Length -gt 36000) {
+            throw 'Supply a ZIP package of at most 36 KB.'
+        }
+        $bytes = [IO.File]::ReadAllBytes($file.FullName)
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try { $hash = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-','').ToLowerInvariant() }
+        finally { $hasher.Dispose() }
+        if (!(Confirm-Bicdop "Deploy reviewed Automation ZIP '$($file.Name)' with SHA-256 $hash?")) { return }
+        $data = [Convert]::ToBase64String($bytes)
+        if ($Options.Count -eq 2) {
+            Install-BicdopAutomationArtifact $hash $data $false
+        } else {
+            $selector = if ($Options[2] -eq '--node') { 'node:' + (Get-BicdopAutomationId $Options[3]) }
+                        elseif ($Options[3] -eq 'all') { 'all' }
+                        else { 'group:' + (Get-BicdopAutomationId $Options[3]) }
+            Invoke-BicdopClusterBatch $selector 'automation' -Automation @{action='deploy';hash=$hash;data=$data}
+        }
+        return
+    }
+    if ($action -eq 'register') {
+        if ($Options.Count -notin 4,5 -or $Options[2] -ne '--path' -or ($Options.Count -eq 5 -and $Options[4] -ne '--remote')) {
+            throw 'Usage: automation register NAME --path DIRECTORY [--remote]'
+        }
+        Register-BicdopAutomation $Options[1] $Options[3] ($Options.Count -eq 5)
+        return
+    }
+    if ($action -in 'watch','tick') {
+        if ($Options.Count -ne 1) { throw 'Usage: automation watch | automation tick' }
+        do {
+            foreach ($job in @(Invoke-BicdopAutomationAction 'list')) {
+                try { Invoke-BicdopAutomationWorker $job.Job }
+                catch { Write-Warning "Automation worker for '$($job.Job)': $($_.Exception.Message)" }
+            }
+            if ($action -eq 'watch') { Start-Sleep -Seconds 2 }
+        } while ($action -eq 'watch')
+        return
+    }
+
+    $flags = @{}
+    $name = ''
+    for ($i=1; $i -lt $Options.Count; $i++) {
+        $option = [string]$Options[$i]
+        if ($option -eq '--json') { $flags.json=$true; continue }
+        if ($option -in '--node','--cluster','--daily','--weekday','--timezone','--run-id') {
+            if ($flags.ContainsKey($option) -or ++$i -ge $Options.Count -or [string]$Options[$i] -like '--*') { throw "Invalid $option argument." }
+            $flags[$option]=[string]$Options[$i]
+        } elseif (!$name -and $option -notlike '--*') { $name=Get-BicdopAutomationId $option }
+        else { throw "Unexpected Automation argument '$option'." }
+    }
+    if ($action -notin 'list','inspect','schedule','enable','disable','run','stop','retry','status','logs','history','failures' -or
+        ($action -eq 'list' -and $name) -or ($action -ne 'list' -and !$name) -or
+        ($flags['--node'] -and $flags['--cluster']) -or (($action -eq 'retry') -ne [bool]$flags['--run-id']) -or
+        ($action -ne 'schedule' -and ($flags['--daily'] -or $flags['--timezone'] -or $flags['--weekday']))) {
+        throw 'Usage: automation list | inspect|schedule|enable|disable|run|stop|retry|status|logs|history|failures NAME [--node NODE | --cluster GROUP] [--json]'
+    }
+    $id = [guid]::NewGuid().ToString('N')
+    $payload = @{ action=$action; name=$name; time=$flags['--daily']; zone=$flags['--timezone']; day=$flags['--weekday']; runId=$flags['--run-id'] }
+    $results = if ($flags['--node'] -or $flags['--cluster']) {
+        $selector = if ($flags['--node']) { 'node:' + (Get-BicdopAutomationId $flags['--node']) }
+                    elseif ($flags['--cluster'] -eq 'all') { 'all' }
+                    else { 'group:' + (Get-BicdopAutomationId $flags['--cluster']) }
+        if ($action -in 'run','stop','enable','disable','schedule','retry' -and !(Confirm-Bicdop "Send Automation '$action' to approved target '$selector'?")) { return }
+        Invoke-BicdopClusterBatch $selector 'automation' -Automation $payload -Quiet:([bool]$flags.json)
+    } else {
+        Invoke-BicdopAutomationAction $action $name $id $payload.time $payload.zone $payload.day -RunId $payload.runId
+    }
+    if ($flags.json) { ConvertTo-Json -InputObject @($results | Where-Object { $null -ne $_ }) -Depth 12 -Compress }
+    else { $results }
+}
+
 function bicdop {
     if (-not $args.Count) { Start-BicdopShell; return }
     $command = $args[0]
     $options = @($args | Select-Object -Skip 1)
     if ($command -eq 'cd..' -and !$options.Count) { $command = 'cd'; $options = @('..') }
     switch ($command) {
+        '--directory' {
+            if ($options.Count -ne 1) { throw 'Usage: bicdop --directory PATH' }
+            $folder = Get-BicdopFolder $options[0]
+            Set-Location -LiteralPath $folder.FullName
+            Start-BicdopShell -KeepLocation
+        }
+        'automation' { Invoke-BicdopAutomation $options }
+        'cluster' { Invoke-BicdopCluster $options }
+        'agent' { Invoke-BicdopAgent $options }
+        'blueprint' { Invoke-BicdopBlueprint $options }
+        'remote' { Invoke-BicdopRemote $options }
         'session' { Invoke-BicdopSession $options }
         'workspace' { Invoke-BicdopWorkspace $options }
         'scan' { Invoke-BicdopScan $options }
@@ -2420,7 +4246,7 @@ function bicdop {
         'update' { Get-BicdopLatestRelease $options }
         'version' {
             if ($options.Count) { throw 'Usage: bicdop version' }
-            Get-BicdopLatestRelease @('--check')
+            $ExecutionContext.SessionState.Module.Version.ToString()
         }
         { $_ -in 'help','--help' } {
             if ($options.Count -eq 1 -and $options[0] -eq 'errors') {
@@ -2434,7 +4260,7 @@ Build failed: read the first PyInstaller error and check dependencies, the prese
 Push rejected: run github --status and github --fetch. Resolve diverged branches before retrying.
 Nothing to commit: use github --status and github --stage FILE to select changes.
 Release failed: check gh auth status in PowerShell, then the release repository, tag, and assets.
-Update failed: use update --check. Installing requires a compatible module ZIP that passes verification.
+Update failed: use update --check. Installing requires a compatible BicdopSetup.exe that passes verification.
 Paths with spaces: wrap the complete path or name in quotes.
 '@
                 return
@@ -2448,6 +4274,11 @@ bicdop scan [PATH | --all | --git | --project NAME | --new NAME]
 bicdop plant [1,3,5 | --all]             --all plants direct subfolders of the current folder
 bicdop marker [--clear | --replant] [--all]
 bicdop marker [PROJECT] --check         Show the contents of the .bicdop marker
+bicdop automation list | register | watch  Manage registered jobs and start a Node worker
+bicdop cluster key | list | status      Create a Controller key or inspect Cluster devices
+bicdop agent setup | status             Set up and inspect the local Agent
+bicdop blueprint plan NAME              Preview desired state on this device
+bicdop remote exec DEVICE -- COMMAND    Run an approved Cluster diagnostic
 bicdop github --login                  Sign in to GitHub CLI through the browser
 bicdop github --logout                 Sign out the active GitHub CLI account
 bicdop github --account                Show the active GitHub CLI account
@@ -2455,9 +4286,11 @@ bicdop github --list                   List repositories owned by the active Git
 bicdop github --create --repo NAME [--private | --public]  Create a GitHub repo (private by default)
 bicdop github --create --local NAME    Initialize a new Git repo inside the active workspace
 bicdop github --clone REPO              Clone a GitHub repo into the active workspace
+bicdop github --clone --all             Preview and clone repositories owned by the active GitHub account
 bicdop github --status                  Check the working tree and compare with GitHub
 bicdop github --workspace               Check every Git repository in the active workspace
 bicdop github --workspace --publish     Preview and publish ready repositories in the active workspace
+bicdop github --workspace --pull        Preview and fast-forward eligible branches in the active workspace
 bicdop github --stage FILE [...]        Stage selected paths
 bicdop github --stage --all             Stage new, modified, and deleted files
 bicdop github --diff [--staged]         Show unstaged or staged changes
@@ -2465,6 +4298,7 @@ bicdop github --unstage FILE [...]      Remove selected changes from staging
 bicdop github --unstage --all           Remove all changes from staging
 bicdop github --commit "MESSAGE"        Commit staged changes
 bicdop github --fetch                   Refresh refs from origin
+bicdop github --fetch --all             Fetch GitHub origins across the active workspace
 bicdop github --pull                    Fast-forward the current branch from origin
 bicdop github --push                    Push the current branch to origin
 bicdop github --publish                 Stage all changes, auto-commit, and push normally
@@ -2489,8 +4323,8 @@ bicdop project --main                   Show the main file saved in .bicdop
 bicdop project --list                   List direct files and folders in the current directory
 bicdop project --version [VERSION]      Refresh, show, or set the project version
 bicdop project PROJECT --version        Refresh and show a named workspace project version
-bicdop version                          Compare installed and latest stable versions
-bicdop update --check                   Check the latest stable GitHub release
+bicdop version                          Show the loaded Bicdop version without contacting GitHub
+bicdop update --check                   Compare installed and published GitHub versions
 bicdop update --apply                   Download and install the latest compatible release
 bicdop mkdir PATH                        Create a directory
 bicdop rmdir PATH [--recursive]          Delete a directory after confirmation

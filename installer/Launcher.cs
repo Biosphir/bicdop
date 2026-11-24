@@ -27,15 +27,26 @@ internal static class Launcher
 
     private static int Main(string[] args)
     {
-        if (Array.IndexOf(args, "--terminal") >= 0 && OpenTerminal()) return 0;
+        int directoryArgument = Array.IndexOf(args, "--directory");
+        if (directoryArgument < 0 && Array.IndexOf(args, "--terminal") >= 0 && OpenTerminal()) return 0;
 
         try
         {
             string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
             string powershell = Path.Combine(system, @"WindowsPowerShell\v1.0\powershell.exe");
             string script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Start-Bicdop.ps1");
-            var options = new ProcessStartInfo(powershell,
-                "-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File \"" + script + "\"");
+            string arguments = "-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File \"" + script + "\"";
+            string directory = null;
+            if (directoryArgument >= 0)
+            {
+                if (directoryArgument + 1 >= args.Length || !Directory.Exists(args[directoryArgument + 1]))
+                    throw new DirectoryNotFoundException("Choose an existing folder to open in Bicdop.");
+                directory = Path.GetFullPath(args[directoryArgument + 1]);
+                string pathArgument = directory.EndsWith("\\", StringComparison.Ordinal) ? directory + "." : directory;
+                arguments += " -Directory \"" + pathArgument + "\"";
+            }
+            var options = new ProcessStartInfo(powershell, arguments);
+            if (directory != null) options.WorkingDirectory = directory;
             options.UseShellExecute = false;
             options.EnvironmentVariables.Remove("PSModulePath");
             using (Process child = Process.Start(options))
