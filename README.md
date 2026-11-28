@@ -1,4 +1,4 @@
-# Bicdop 0.8.14
+# Bicdop 0.8.16
 
 ## Windows installer
 
